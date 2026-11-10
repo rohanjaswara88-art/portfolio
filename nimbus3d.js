@@ -1,9 +1,9 @@
 /* =====================================================================
-   NIMBUS 3D: the corner mascot, a rigged glTF model (models/daffodill.glb).
+   NIMBUS 3D: the corner mascot, a rigged glTF model (models/daffodill-anim.glb).
    The page's mascot script keeps all the behaviour (reading, scrolling, hair rubbing)
    and calls draw() every frame with its eased expression numbers.
 
-     const nimbus = createNimbus3D(canvas, 'models/daffodill.glb');
+     const nimbus = createNimbus3D(canvas, 'models/daffodill-anim.glb');
      nimbus.draw({ st, T, blink, touch });   // st = the eased expression state
      nimbus.hitHair(clientX, clientY);       // true when the pointer is over her head/hair
 
@@ -89,6 +89,32 @@
     let model = null, B = null, rest = null, dyn = null, body = null;   // body = whole-body life layer (nimbus-body.js)
     const player = window.NimbusMotion ? NimbusMotion.createPlayer() : null;   // hand-keyed clips (tour)
     let lastT = 0;
+    // Blender-made clips (idle, talk, waveL/R, takeoff, glide, land) played by an AnimationMixer
+    let mixer = null, acts = {}, playing = '', finished = false, talkHold = 0;
+    const NEXT = { takeoff: 'glide', land: 'idle', waveL: 'idle', waveR: 'idle' };
+    const FADE = { takeoff: 0.15, glide: 0.3, land: 0.2, idle: 0.6, talk: 0.6, waveL: 0.35, waveR: 0.35 };
+    function wantClip(tp, dt) {
+      talkHold = tp.talk > 0.25 ? 1.2 : Math.max(0, talkHold - dt);           // don't flip between words
+      const s = tp.state;
+      if (s === 'takeoff' || s === 'glide' || s === 'land') return s;
+      if (tp.wave > 0.3) return tp.waveSide > 0 ? 'waveL' : 'waveR';
+      return s && talkHold > 0 ? 'talk' : 'idle';
+    }
+    let requested = '';
+    function driveClips(tp, dt) {
+      const want = wantClip(tp, dt);
+      let name = want;
+      if (want === requested && finished && NEXT[playing]) name = NEXT[playing];     // one-shot done -> its follow-up
+      else if (want === requested) name = playing || want;
+      if (want !== requested) { requested = want; }
+      if (name !== playing && acts[name]) {
+        const next = acts[name], prev = acts[playing];
+        next.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).play();
+        if (prev) prev.crossFadeTo(next, FADE[name] || 0.4, false);
+        playing = name; finished = false;
+      }
+      mixer.update(dt);
+    }
     const lastVel = new THREE.Vector3(), velW = new THREE.Vector3(), inertia = new THREE.Vector3(), windW = new THREE.Vector3();
     const hair = [], cloth = [];       // cloth = coat tails, chains, trouser panels, rope, hair strands (wind)
     const loader = new THREE.GLTFLoader();
@@ -142,6 +168,15 @@
       if (window.NimbusMotion) dyn = NimbusMotion.createDynamics(cloth);
       gltf.scene.updateMatrixWorld(true);
       if (window.NimbusBody) body = NimbusBody.create(bones, { rotateWorld, aimBlend, AY, FWD, SIDE, get model() { return model; } });
+      if (gltf.animations && gltf.animations.length) {
+        mixer = new THREE.AnimationMixer(gltf.scene);
+        gltf.animations.forEach(c => {
+          const a = mixer.clipAction(c);
+          if (NEXT[c.name]) { a.setLoop(THREE.LoopOnce, 1); a.clampWhenFinished = true; }
+          acts[c.name] = a;
+        });
+        mixer.addEventListener('finished', e => { if (acts[playing] === e.action) finished = true; });
+      }
       rest = new Map();
       Object.values(bones).forEach(b => rest.set(b, { p: b.position.clone(), q: b.quaternion.clone() }));
       model = gltf.scene;
@@ -241,6 +276,8 @@
       const st = f.st, T = f.T, touch = f.touch || 0;
       rest.forEach((r, b) => { b.position.copy(r.p); b.quaternion.copy(r.q); });
       const fdt = Math.min(0.3, Math.max(0, T - lastT)); lastT = T;
+      const M = !!mixer;                     // body comes from the Blender clips; code adds gaze, face, pointing, reactions
+      if (M) driveClips(tp, Math.min(0.1, fdt));
 
       // whole body: facing, lean from speed (more when flying sideways), nose up when climbing,
       // tuck on take-off, flare back on landing; pivot = her hips; floating bob
@@ -249,21 +286,23 @@
       const pitch = tp.fly * (0.12 + 0.55 * tp.speed * (0.35 + 0.65 * side)) - up * tp.speed * tp.fly * 0.25
         + tp.crouch * 0.25 - tp.flare * 0.4;
       // hand-keyed clip (tour): it owns the body pose, faded in with the full-body framing
-      const clipW = tp.state && player ? tp.zoom : 0;
+      const clipW = !M && tp.state && player ? tp.zoom : 0;
       let cp = null;
       if (clipW > 0) { player.play(tp.state, T); cp = player.sample(T); }
       const bodyPitch = cp ? pitch * (1 - clipW) + (cp.pitch + (player.state === 'hover' ? 0.25 * tp.speed : 0)) * clipW : pitch;
-      model.rotation.set(bodyPitch, yaw, tp.roll + (cp ? cp.roll * clipW : 0));
+      const hopLean = M && tp.state === 'hover' ? 0.18 * tp.speed : 0;          // short hops: lean into the move
+      model.rotation.set(M ? hopLean : bodyPitch, yaw, tp.roll + (cp ? cp.roll * clipW : 0));
       model.position.copy(PIVOT).sub(PIVOT.clone().applyEuler(model.rotation));
-      model.position.y += tp.bob * Math.sin(T * 2.2);
+      if (!M) model.position.y += tp.bob * Math.sin(T * 2.2);
       FWD.set(Math.sin(yaw), 0, Math.cos(yaw)); SIDE.set(Math.cos(yaw), 0, -Math.sin(yaw));
       model.updateMatrixWorld(true);
       const mess = Math.max(0, Math.min(1.1, st.mess)), an = Math.max(0, st.anger), belt = clamp01(st.belt);
 
       // body: breathing, idle sway, scroll bank + shake, lean
       const shake = Math.sin(T * 58) * st.sh * 1.2;
-      rotateWorld(B.spine1, FWD, -(st.bank + st.tilt * 0.6 + Math.sin(T * 0.8) * 0.8 - shake) * DEG);
-      rotateWorld(B.spine1, SIDE, (st.lean - 1) * 1.8 + Math.sin(T * 1.5) * 0.012 - belt * 0.06);
+      const own = M ? 0 : 1;                   // the clips already breathe and sway
+      rotateWorld(B.spine1, FWD, -(st.bank + st.tilt * 0.6 + own * Math.sin(T * 0.8) * 0.8 - shake) * DEG);
+      rotateWorld(B.spine1, SIDE, (st.lean - 1) * 1.8 + own * Math.sin(T * 1.5) * 0.012 - belt * 0.06);
       rotateWorld(B.spine2, AY, st.gx * 0.12);
       if (cp) {
         rotateWorld(B.spine1, SIDE, cp.spine[0] * clipW); rotateWorld(B.spine1, AY, cp.spine[1] * clipW); rotateWorld(B.spine1, FWD, -cp.spine[2] * clipW);
@@ -293,12 +332,20 @@
       const open = tp.talk * (0.3 + 0.7 * Math.abs(Math.sin(T * 13) * Math.sin(T * 7.3 + 1)));
       if (open > 0.01) B.lowerLip.forEach(l => nudge(l.bone, headTurn, 0, -l.k * open, 0));
 
-      if (body) body.torso(T, cp, clipW);
+      if (body && !M) body.torso(T, cp, clipW);
 
       // arms: rest -> brace (while you scroll) -> hands on hips (annoyed)
       const hips = clamp01(an * 1.4), w = { brace: clamp01(belt * (1 - hips)), hips };
       const pointW = V().fromArray(tp.pointDir).normalize();
-      B.arm.forEach(a => {
+      const react = Math.max(w.brace, w.hips);
+      if (M) B.arm.forEach(a => {              // clip arms; scroll-brace / hands-on-hips / pointing blend over them
+        [0, 1].forEach(i => {
+          const bone = i ? a.fore : a.upper, child = i ? a.hand : a.fore;
+          if (react > 0.01) aimBlend(bone, child, armLocal(w, i, a.side, NO_TOUR, T, null, 0).applyQuaternion(model.quaternion), react);
+          if (tp.point > 0 && a.side === tp.pointSide) aimBlend(bone, child, (i === 0 ? pointW.clone().add(V(0, -0.25, 0)) : pointW.clone()).normalize(), tp.point);
+        });
+      });
+      else B.arm.forEach(a => {
         const dirs = [0, 1].map(i => {
           const d = armLocal(w, i, a.side, tp, T, cp, clipW);
           if (i === 0) d.x += Math.sin(T * 0.8 + a.side) * 0.03;
@@ -314,7 +361,8 @@
       const hoverW = tp.zoom * 0.6 * (1 - tp.fly);
       const legW = { fly: tp.fly, crouch: tp.crouch, flare: tp.flare, hover: hoverW };
       const legSum = legW.fly + legW.crouch + legW.flare + legW.hover;
-      if (cp) B.leg.forEach(l => {                     // clip legs
+      if (M) { /* legs come from the clips */ }
+      else if (cp) B.leg.forEach(l => {                     // clip legs
         const t = cp[l.side > 0 ? 'lLt' : 'lRt'], c = cp[l.side > 0 ? 'lLc' : 'lRc'];
         aimBlend(l.thigh, l.calf, V(t[0], t[1], t[2]).normalize().applyQuaternion(model.quaternion), clipW);
         aimBlend(l.calf, l.foot, V(c[0], c[1], c[2]).normalize().applyQuaternion(model.quaternion), clipW);
@@ -333,7 +381,7 @@
       });
 
       // whole-body life: wrists, fingers, toes, slow drift on every joint, then joint springs
-      if (body) {
+      if (body && !M) {
         body.extremities(T, cp, clipW, tp);
         body.drift(T, 0.7 + 0.3 * tp.zoom, tp.speed * clipW);
         body.settle(fdt);
@@ -372,6 +420,6 @@
       renderer.render(scene, camera);
     }
 
-    return { draw, hitHair, resize, restYaw: BODY_YAW, get root() { return model; } };
+    return { draw, hitHair, resize, restYaw: BODY_YAW, get root() { return model; }, get clip() { return playing; } };
   };
 })();

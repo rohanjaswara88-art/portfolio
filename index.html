@@ -666,7 +666,7 @@ h2 [data-split]:last-child:not(:first-child) { font-family: "Instrument Serif", 
   </section>
 </main>
 
-  <!-- NIMBUS: the mascot, a rigged 3D model (nimbus3d.js + models/daffodill.glb) -->
+  <!-- NIMBUS: the mascot, a rigged 3D model (nimbus3d.js + models/daffodill-anim.glb) -->
   <div class="nimbus" id="nimbus" aria-hidden="true"><canvas id="nbCanvas"></canvas></div>
   <button class="ai-fab glass" data-ai-auto type="button" aria-label="AI Auto: guided tour of this website">&#10022; AI Auto</button>
 
@@ -1658,7 +1658,7 @@ h2 [data-split]:last-child:not(:first-child) { font-family: "Instrument Serif", 
     const PET_RATE = 0.0011;        // how messy one mouse pass makes her hair (bigger = messier)
     const HAIR_RECOVER = 0.04;      // how fast the hair tidies itself when you stop (per second)
 
-    const model = window.createNimbus3D($('#nbCanvas'), 'models/daffodill.glb');
+    const model = window.createNimbus3D($('#nbCanvas'), 'models/daffodill-anim.glb');
     (window.RJ = window.RJ || {}).nimbus = model;
     const touring = () => !!(window.RJTour && window.RJTour.active);
     const mix = (a, b, t) => a + (b - a) * t;
