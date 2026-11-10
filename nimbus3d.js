@@ -121,6 +121,9 @@
     const hair = [], cloth = [];       // cloth = coat tails, chains, trouser panels, rope, hair strands (wind)
     const loader = new THREE.GLTFLoader();
     if (THREE.DRACOLoader) { const d = new THREE.DRACOLoader(); d.setDecoderPath(DRACO_PATH); loader.setDRACOLoader(d); }
+    // the model (~2MB) is fetched only when needed: on idle after the page has loaded, or when the tour asks
+    let loading = null;
+    const load = () => loading || (loading = new Promise(res => {
     loader.load(url, gltf => {
       const bones = {};
       gltf.scene.traverse(o => {
@@ -185,7 +188,12 @@
       model.rotation.order = 'YXZ';
       model.rotation.y = BODY_YAW;
       scene.add(model);
-    }, undefined, err => { console.error('nimbus: model failed to load', err); });
+      res(true);
+    }, undefined, err => { console.error('nimbus: model failed to load', err); res(false); });
+    }));
+    const idle = window.requestIdleCallback || (f => setTimeout(f, 1200));
+    if (document.readyState === 'complete') idle(load, { timeout: 4000 });
+    else addEventListener('load', () => idle(load, { timeout: 4000 }), { once: true });
 
     // ---------- bone helpers ----------
     const tq = new THREE.Quaternion(), pq = new THREE.Quaternion(), tv = new THREE.Vector3(), tv2 = new THREE.Vector3(), ts = new THREE.Vector3();
@@ -487,6 +495,6 @@
       renderer.render(scene, camera);
     }
 
-    return { draw, hitHair, resize, restYaw: BODY_YAW, get root() { return model; }, get clip() { return playing; } };
+    return { load, draw, hitHair, resize, restYaw: BODY_YAW, get root() { return model; }, get clip() { return playing; } };
   };
 })();

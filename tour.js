@@ -47,6 +47,7 @@
     { sec: '#about', el: '#about h2', say: "This is the About section. One builder, the whole build: Rohan designs, codes and launches everything himself." },
     { sec: '#about', el: '#about .panel', act: 'sweep', say: "He studies BCA with a focus on AI and machine learning in Bardhaman, West Bengal. He loves building practical projects, from an AI voice assistant to a full e-commerce website, and learns something new with every one." },
     { sec: '#about', el: '#about .stats', act: 'sweep', say: "Quick facts: he's in his first year of BCA, he has built three projects so far, and his dream is to become a software developer." },
+    { sec: '#about', el: '#about .skills', act: 'sweep', say: "His toolkit: Python, JavaScript, HTML and CSS, Three.js and GSAP for motion, Blender for 3D, voice AI, and Git with GitHub." },
 
     { sec: '#works', el: '#works h2', say: "Here's his selected work. Every card shows a small live animation of the project." },
     { sec: '#works', el: projs(0), act: 'sweep', say: "First, an AI voice assistant. It listens to your commands and answers you by speech." },
@@ -203,10 +204,14 @@
         if (actx && actx.state === 'suspended') actx.resume().catch(() => {});
         setTimeout(() => { if (!done) a.play().then(() => { speaking = true; }).catch(() => { if (!done) { done = true; res(true); } }); }, 250);
       });
+      // Pause/resume: only a line the tour itself paused is ever resumed. A line that just finished also
+      // reports a.paused (before onended fires), and resuming that replayed it from the start.
+      let held = false;
       const watch = () => {
         if (done) return;
-        if (cut()) { a.pause(); fin(); return; }
-        if (paused && !a.paused) a.pause(); else if (!paused && a.paused && speaking) a.play().catch(() => {});
+        if (cut() || !voiceOn || curAudio !== a || a.ended) { if (!a.ended) a.pause(); fin(); return; }
+        if (paused && !held && !a.paused) { held = true; a.pause(); }
+        else if (!paused && held) { held = false; a.play().catch(() => {}); }
         setTimeout(watch, 60);
       };
       watch();
@@ -483,11 +488,16 @@
     }
     bubble.style.transform = 'translate(' + clamp(left, 12, innerWidth - bw - 12).toFixed(1) + 'px,' + clamp(top, HUD_H - 10, innerHeight - BAR_H - bh).toFixed(1) + 'px)';
   }
+  let curLine = '';
   async function say(text) {
     text = typeof text === 'function' ? text() : text;
     if (!text) return;
+    curLine = text;
+    // when she speaks, the voice is the message: no caption. The bubble is only for a muted tour
+    // (or a browser with no voice at all), so the words are still there to read.
+    const voiced = voiceOn && (hasVoice || !!(recorded && recorded.has(voiceHash(text))));
     bubbleP.textContent = '';
-    showBubble(true);
+    showBubble(!voiced);
     const typeMs = Math.min(1600, text.length * 16), t0 = performance.now();
     typing = true;
     const typer = setInterval(() => {
@@ -496,11 +506,12 @@
       if (k >= 1) { clearInterval(typer); typing = false; }
     }, 30);
     // minimum time on screen: enough to read it, even if the browser's voice fails and ends at once
-    const readMs = voiceOn && (hasVoice || recorded) ? text.length * 38 + 900 : text.length * 52 + 1400;
+    const readMs = voiced ? 900 : text.length * 52 + 1400;
     await Promise.all([speak(text), sleep(readMs)]);
     clearInterval(typer); typing = false;
     bubbleP.textContent = text;
     await sleep(350);
+    curLine = '';
   }
 
   // =====================================================================
@@ -580,7 +591,9 @@
   async function start() {
     if (active || !RJ.isReady()) return;
     audioGraph();
-    active = true; paused = false; skip = false; backReq = false; stopReq = false; idx = 0; curSec = null;
+    active = true;
+    if (RJ.nimbus && RJ.nimbus.load && !(await RJ.nimbus.load())) { active = false; return; }   // model not fetched yet: wait for it
+    paused = false; skip = false; backReq = false; stopReq = false; idx = 0; curSec = null;
     if (document.body.classList.contains('locked') && $('#menuBtn')) $('#menuBtn').click();   // close the menu
     document.body.classList.add('touring');
     RJ.lenis.stop();
@@ -648,7 +661,10 @@
     if (t === 'pause') { paused = !paused; if (hasVoice) paused ? speechSynthesis.pause() : speechSynthesis.resume(); }
     else if (t === 'next') { paused = false; skip = true; hush(); }
     else if (t === 'back') { paused = false; backReq = true; skip = true; hush(); }
-    else if (t === 'voice') { voiceOn = !voiceOn; if (!voiceOn) hush(); }
+    else if (t === 'voice') {
+      voiceOn = !voiceOn;
+      if (!voiceOn) { hush(); if (curLine) { bubbleP.textContent = curLine; showBubble(true); } }   // muted: show the words instead
+    }
     else if (t === 'stop') { stopReq = true; skip = true; paused = false; }
     updateBar();
   });
