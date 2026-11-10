@@ -86,7 +86,7 @@
     const anger = new THREE.Sprite(new THREE.SpriteMaterial({ map: angerTexture(), transparent: true, depthTest: false }));
     anger.renderOrder = 10; scene.add(anger);
 
-    let model = null, B = null, rest = null, dyn = null;
+    let model = null, B = null, rest = null, dyn = null, body = null;   // body = whole-body life layer (nimbus-body.js)
     const player = window.NimbusMotion ? NimbusMotion.createPlayer() : null;   // hand-keyed clips (tour)
     let lastT = 0;
     const lastVel = new THREE.Vector3(), velW = new THREE.Vector3(), inertia = new THREE.Vector3(), windW = new THREE.Vector3();
@@ -140,6 +140,8 @@
         if (links.length) cloth.push(Object.assign({ links }, PHYS[g.kind]));
       });
       if (window.NimbusMotion) dyn = NimbusMotion.createDynamics(cloth);
+      gltf.scene.updateMatrixWorld(true);
+      if (window.NimbusBody) body = NimbusBody.create(bones, { rotateWorld, aimBlend, AY, FWD, SIDE, get model() { return model; } });
       rest = new Map();
       Object.values(bones).forEach(b => rest.set(b, { p: b.position.clone(), q: b.quaternion.clone() }));
       model = gltf.scene;
@@ -238,6 +240,7 @@
       if (!model) { renderer.render(scene, camera); return; }
       const st = f.st, T = f.T, touch = f.touch || 0;
       rest.forEach((r, b) => { b.position.copy(r.p); b.quaternion.copy(r.q); });
+      const fdt = Math.min(0.3, Math.max(0, T - lastT)); lastT = T;
 
       // whole body: facing, lean from speed (more when flying sideways), nose up when climbing,
       // tuck on take-off, flare back on landing; pivot = her hips; floating bob
@@ -290,6 +293,8 @@
       const open = tp.talk * (0.3 + 0.7 * Math.abs(Math.sin(T * 13) * Math.sin(T * 7.3 + 1)));
       if (open > 0.01) B.lowerLip.forEach(l => nudge(l.bone, headTurn, 0, -l.k * open, 0));
 
+      if (body) body.torso(T, cp, clipW);
+
       // arms: rest -> brace (while you scroll) -> hands on hips (annoyed)
       const hips = clamp01(an * 1.4), w = { brace: clamp01(belt * (1 - hips)), hips };
       const pointW = V().fromArray(tp.pointDir).normalize();
@@ -327,6 +332,13 @@
         });
       });
 
+      // whole-body life: wrists, fingers, toes, slow drift on every joint, then joint springs
+      if (body) {
+        body.extremities(T, cp, clipW, tp);
+        body.drift(T, 0.7 + 0.3 * tp.zoom, tp.speed * clipW);
+        body.settle(fdt);
+      }
+
       // hair: swings behind her (spring in st.hs) and gets ruffled when messy
       model.updateMatrixWorld(true);
       const swing = st.hs * 1.6 * DEG;
@@ -338,7 +350,7 @@
 
       // spring physics for coat, chains, trouser panels, rope and hair: they lag her motion,
       // swing, overshoot and stream back in the air while she flies
-      const dt = Math.min(0.05, Math.max(0, T - lastT)); lastT = T;
+      const dt = Math.min(0.05, fdt);
       if (dyn && dt > 0) {
         const cmPerPx = 2 * lerp(FRAME.halfHeight, FULL.halfHeight, tp.zoom) / Math.max(1, canvas.clientHeight);
         const vp = tp.velPx || [0, 0];
@@ -360,6 +372,6 @@
       renderer.render(scene, camera);
     }
 
-    return { draw, hitHair, resize, restYaw: BODY_YAW };
+    return { draw, hitHair, resize, restYaw: BODY_YAW, get root() { return model; } };
   };
 })();
