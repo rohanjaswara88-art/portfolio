@@ -169,7 +169,7 @@
   // Same voice in every browser; the browser's own voice is only the fallback for a missing line.
   const voiceHash = t => { let h = 0x811c9dc5; for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16).padStart(8, '0'); };
   let recorded = null, actx = null, analyser = null, levelBuf = null, voiceLevel = 0;
-  fetch('voice/manifest.json').then(r => r.ok ? r.json() : null).then(m => { recorded = m && m.files ? new Set(m.files) : null; }).catch(() => {});
+  fetch('voice/manifest.json', { cache: 'no-cache' }).then(r => r.ok ? r.json() : null).then(m => { recorded = m && m.files ? new Set(m.files) : null; }).catch(() => {});
   function audioGraph() {                       // created on the AI Auto click (a user gesture), reused after
     if (actx || !window.AudioContext) return;
     try {
@@ -184,15 +184,25 @@
     let sum = 0; for (let i = 0; i < levelBuf.length; i++) sum += levelBuf[i] * levelBuf[i];
     return Math.min(1, Math.sqrt(sum / levelBuf.length) * 7);
   }
+  let curAudio = null;
+  function hush() {                              // stop anything still speaking: never two voices at once
+    if (curAudio) { try { curAudio.pause(); } catch (e) { /* already gone */ } curAudio = null; }
+    if (hasVoice) speechSynthesis.cancel();
+  }
   function playRecorded(text) {
     return new Promise(res => {
-      const a = new Audio('voice/' + voiceHash(text) + '.mp3');
+      hush();
+      const a = curAudio = new Audio('voice/' + voiceHash(text) + '.mp3');
       let done = false;
       const fin = () => { if (!done) { done = true; speaking = false; res(true); } };
       a.onended = fin;
-      a.onerror = () => { if (!done) { done = true; speaking = false; res(false); } };
+      // a missing file falls back to the browser voice; a blocked play() is retried once, never doubled
+      a.onerror = () => { if (!done) { done = true; speaking = false; res(a.error && a.error.code === 4 ? false : true); } };
       if (actx) { try { actx.createMediaElementSource(a).connect(analyser); if (actx.state === 'suspended') actx.resume(); } catch (e) { /* plays without the meter */ } }
-      a.play().then(() => { speaking = true; }).catch(() => { if (!done) { done = true; res(false); } });
+      a.play().then(() => { speaking = true; }).catch(() => {
+        if (actx && actx.state === 'suspended') actx.resume().catch(() => {});
+        setTimeout(() => { if (!done) a.play().then(() => { speaking = true; }).catch(() => { if (!done) { done = true; res(true); } }); }, 250);
+      });
       const watch = () => {
         if (done) return;
         if (cut()) { a.pause(); fin(); return; }
@@ -204,14 +214,18 @@
   }
   async function speak(text) {
     if (!voiceOn || cut()) return;
-    if (recorded && recorded.has(voiceHash(text)) && await playRecorded(text)) return;
+    if (recorded && recorded.has(voiceHash(text))) {
+      if (await playRecorded(text)) return;
+      if (cut()) return;
+    }
+    hush();
     return speakSynth(text);
   }
   function speakSynth(text) {
     if (!voiceOn || !hasVoice || cut()) return Promise.resolve();
     return new Promise(res => {
       let done = false;
-      const fin = () => { if (!done) { done = true; speaking = false; clearTimeout(guard); res(); } };
+      const fin = () => { if (!done) { done = true; speaking = false; clearTimeout(guard); speechSynthesis.cancel(); res(); } };
       const u = new SpeechSynthesisUtterance(text);
       if (voice) u.voice = voice;
       const natural = voice && /(natural|neural|enhanced|premium)/i.test(voice.name);
@@ -388,9 +402,9 @@
     const dx = tx - sx, dy = ty - sy;
     pose.pointSide = dx >= 0 ? 1 : -1;
     pose.pointDir = [dx, -dy, Math.hypot(dx, dy) * 0.25];
-    look.x = clamp(dx / (innerWidth * 0.9), -0.6, 0.6);
+    look.x = clamp(dx / (innerWidth * 0.9), -0.4, 0.4);          // head + body stay within a natural neck twist
     look.y = clamp(dy / (innerHeight * 0.6), -0.7, 0.7);
-    await tween(pose, { yaw: clamp(dx / innerWidth * 1.4, -0.75, 0.75), point: 1, duration: 0.5, ease: 'power2.out' });
+    await tween(pose, { yaw: clamp(dx / innerWidth * 0.8, -0.4, 0.4), point: 1, duration: 0.7, ease: 'power2.inOut' });
   }
   const faceViewer = () => { look.x = 0; look.y = 0.05; return tween(pose, { yaw: 0, point: 0, duration: 0.45 }); };
 
@@ -600,7 +614,7 @@
   }
 
   async function finish() {
-    if (hasVoice) speechSynthesis.cancel();
+    hush();
     releaseHover();
     skip = false; stopReq = false; paused = false;
     showBubble(false);
@@ -632,9 +646,9 @@
     if (!b || !active) return;
     const t = b.dataset.t;
     if (t === 'pause') { paused = !paused; if (hasVoice) paused ? speechSynthesis.pause() : speechSynthesis.resume(); }
-    else if (t === 'next') { paused = false; skip = true; if (hasVoice) speechSynthesis.cancel(); }
-    else if (t === 'back') { paused = false; backReq = true; skip = true; if (hasVoice) speechSynthesis.cancel(); }
-    else if (t === 'voice') { voiceOn = !voiceOn; if (!voiceOn && hasVoice) speechSynthesis.cancel(); }
+    else if (t === 'next') { paused = false; skip = true; hush(); }
+    else if (t === 'back') { paused = false; backReq = true; skip = true; hush(); }
+    else if (t === 'voice') { voiceOn = !voiceOn; if (!voiceOn) hush(); }
     else if (t === 'stop') { stopReq = true; skip = true; paused = false; }
     updateBar();
   });

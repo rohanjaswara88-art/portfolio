@@ -468,7 +468,7 @@ h2 [data-split]:last-child:not(:first-child) { font-family: "Instrument Serif", 
     .sec { will-change: auto; }
   }
 </style>
-<link rel="stylesheet" href="tour.css">
+<link rel="stylesheet" href="tour.css?v=20261110c">
 </head>
 <body>
 
@@ -692,9 +692,9 @@ h2 [data-split]:last-child:not(:first-child) { font-family: "Instrument Serif", 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/DRACOLoader.js"></script>
-<script src="nimbus-motion.js"></script>
-<script src="nimbus-body.js"></script>
-<script src="nimbus3d.js"></script>
+<script src="nimbus-motion.js?v=20261110c"></script>
+<script src="nimbus-body.js?v=20261110c"></script>
+<script src="nimbus3d.js?v=20261110c"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
@@ -1658,7 +1658,7 @@ h2 [data-split]:last-child:not(:first-child) { font-family: "Instrument Serif", 
     const PET_RATE = 0.0011;        // how messy one mouse pass makes her hair (bigger = messier)
     const HAIR_RECOVER = 0.04;      // how fast the hair tidies itself when you stop (per second)
 
-    const model = window.createNimbus3D($('#nbCanvas'), 'models/daffodill-anim.glb');
+    const model = window.createNimbus3D($('#nbCanvas'), 'models/daffodill-anim.glb?v=20261110c');
     (window.RJ = window.RJ || {}).nimbus = model;
     const touring = () => !!(window.RJTour && window.RJTour.active);
     const mix = (a, b, t) => a + (b - a) * t;
@@ -1877,6 +1877,6 @@ h2 [data-split]:last-child:not(:first-child) { font-family: "Instrument Serif", 
   } catch (e) { /* keeps the data link */ }
 })();
 </script>
-<script src="tour.js"></script>
+<script src="tour.js?v=20261110c"></script>
 </body>
 </html>

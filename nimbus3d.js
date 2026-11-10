@@ -98,6 +98,7 @@
       const s = tp.state;
       if (s === 'takeoff' || s === 'glide' || s === 'land') return s;
       if (tp.wave > 0.3) return tp.waveSide > 0 ? 'waveL' : 'waveR';
+      if (tp.point > 0.25) return 'idle';               // pointing: calm body, no talk gestures crossing the arm
       return s && talkHold > 0 ? 'talk' : 'idle';
     }
     let requested = '';
@@ -300,7 +301,7 @@
         springStep(MO.leg, mDrive, dt);
         springStep(MO.shin, MO.leg.x, dt);
         const yr = Math.max(-6, Math.min(6, (yaw - mPrevYaw) / dt)); mPrevYaw = yaw;
-        springStep(MO.twist, mTw.set(Math.max(-0.35, Math.min(0.35, yr * 0.12)), 0, 0), dt);
+        springStep(MO.twist, mTw.set(Math.max(-0.2, Math.min(0.2, yr * 0.08)), 0, 0), dt);
       }
       const c = MO.core.x, hd = MO.head.x, ar = MO.arm.x, fo = MO.fore.x, lg = MO.leg.x, sh = MO.shin.x, tw = MO.twist.x.x;
       // core: the torso leans into the push, spread down the spine (hips least, chest most);
@@ -310,7 +311,7 @@
       // head stabilisation: it rides with the chest, then re-levels (keeps her eyes steady)
       tiltToward(B.neck, hd, -0.16, 0.2); tiltToward(B.head, hd, -0.2, 0.24);
       // turning: hips lead, chest and head counter-rotate
-      rotateWorld(B.pelvis, AY, tw); rotateWorld(B.spine2, AY, -0.5 * tw); rotateWorld(B.neck, AY, -0.25 * tw); rotateWorld(B.head, AY, -0.2 * tw);
+      rotateWorld(B.pelvis, AY, 0.4 * tw); rotateWorld(B.spine2, AY, -0.2 * tw); rotateWorld(B.head, AY, -0.15 * tw);
       // limbs trail the push and swing back with overshoot; dropping lifts the arms out, rising tucks them in
       B.arm.forEach(a => {
         tiltToward(a.upper, ar, 0.55, 0.5);
