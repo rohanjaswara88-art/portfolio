@@ -14,14 +14,16 @@ def leg(d, knee, point, toe=0.0):
 
 def base():
     return dict(
-        root=dict(pitch=0.04, roll=0.0, yaw=0.0, off=[0, 0, 0]),
-        pelvis=[0.0, 0.0, 0.0], spine=[0.02, 0, 0], spine1=[0.02, 0, 0], spine2=[-0.03, 0, 0],
-        neck=[-0.02, 0, 0], head=[-0.14, 0, 0],
-        clavL=[0, 0], clavR=[0, 0],
-        armL=arm((0.2, 0.06, -1), 0.32, 0.9, 0.12, 0.42, hang=0.15),
-        armR=arm((0.2, 0.06, -1), 0.28, 0.9, 0.14, 0.45, hang=0.15),
-        legL=leg((0.05, 0.22, -1), 0.5, 0.75, 0.15),
-        legR=leg((0.0, -0.04, -1), 0.18, 0.62, 0.1),
+        # a relaxed FLOATING body, not a standing one: hips and knees soft, toes pointed, arms drifting
+        # a little away from the body with bent elbows, a gentle C-curve in the back, asymmetric throughout
+        root=dict(pitch=0.07, roll=0.0, yaw=0.0, off=[0, 0, 0]),
+        pelvis=[0.03, 0.04, 0.03], spine=[0.05, -0.02, -0.01], spine1=[0.05, -0.02, -0.01], spine2=[0.02, 0.01, 0.02],
+        neck=[-0.08, 0.0, 0.02], head=[-0.07, 0.05, 0.03],
+        clavL=[-0.02, 0.04], clavR=[0.015, 0.02],
+        armL=arm((0.34, 0.2, -1), 0.66, 0.75, 0.24, 0.52, hang=0.05),
+        armR=arm((0.27, 0.06, -1), 0.44, 0.85, 0.16, 0.4, hang=0.06),
+        legL=leg((0.07, 0.36, -1), 0.9, 0.95, 0.2),
+        legR=leg((0.0, 0.1, -1), 0.38, 0.82, 0.15),
     )
 
 # ---------- tiny math ----------
@@ -73,27 +75,28 @@ def idle(t, amt=1.0, P=IDLE_P):
     look = S(t, P, 1, 1.9) * 0.7 + S(t, P, 3, 0.2) * 0.3
     p['root']['off'] = [shift * 1.4 * amt, 0, (S(t, P, 2, 0.8) * 1.1 + br * 0.25) * amt]
     p['root']['roll'] = 0.0
-    p['pelvis'] = [0.02 * S(t, P, 2, 0.5) * amt, -0.055 * shift * amt, 0.04 * S(t, P, 1, 2.6) * amt]
-    p['spine'] = [0.02 + 0.01 * br, 0.03 * shift, -0.015 * S(t, P, 1, 2.6)]
-    p['spine1'] = [0.02 - 0.015 * br - 0.03 * adj, 0.025 * shift, -0.02 * S(t, P, 1, 2.9)]
-    p['spine2'] = [-0.03 - 0.03 * br - 0.04 * adj, 0.012 * shift, 0.01 * look]
-    p['neck'] = [0.06 + 0.012 * br + 0.02 * adj, -0.015 * shift, 0.05 * look]
-    p['head'] = [-0.05 + 0.02 * S(t, P, 2, 1.3) + 0.015 * br, -0.03 * shift + 0.02 * S(t, P, 5, 0.7), 0.07 * look]
+    b0 = base()
+    p['pelvis'] = add3(b0['pelvis'], [0.03 * S(t, P, 2, 0.5) * amt, -0.08 * shift * amt, 0.05 * S(t, P, 1, 2.6) * amt])
+    p['spine'] = add3(b0['spine'], [0.012 * br, 0.04 * shift, -0.02 * S(t, P, 1, 2.6)])
+    p['spine1'] = add3(b0['spine1'], [-0.02 * br - 0.035 * adj, 0.035 * shift, -0.025 * S(t, P, 1, 2.9)])
+    p['spine2'] = add3(b0['spine2'], [-0.035 * br - 0.045 * adj, 0.02 * shift, 0.015 * look])
+    p['neck'] = add3(b0['neck'], [0.012 * br + 0.02 * adj, -0.02 * shift, 0.05 * look])
+    p['head'] = add3(b0['head'], [0.025 * S(t, P, 2, 1.3) + 0.015 * br, -0.04 * shift + 0.025 * S(t, P, 5, 0.7), 0.07 * look])
     p['clavL'] = [0.025 * br + 0.04 * adj, -0.03 * adj]
     p['clavR'] = [0.025 * br + 0.04 * adj, -0.03 * adj]
     for k, sg, ph in (('armL', 1, 0.0), ('armR', -1, 1.7)):
         a = p[k]
         sw = S(t, P, 1, ph) * 0.6 + S(t, P, 2, ph + 1) * 0.4
-        a['up'] = add3(a['up'], [0.03 * sw - 0.05 * shift * sg, 0.05 * S(t, P, 1, ph + 2.2), 0])
-        a['elbow'] += 0.06 * S(t, P, 2, ph + 0.5) + 0.05 * adj
+        a['up'] = add3(a['up'], [0.05 * sw - 0.06 * shift * sg, 0.07 * S(t, P, 1, ph + 2.2), 0])
+        a['elbow'] += 0.1 * S(t, P, 2, ph + 0.5) + 0.06 * adj
         a['twist'] += 0.08 * S(t, P, 1, ph + 1.2)
         a['flex'] += 0.06 * S(t, P, 3, ph)
         a['curl'] += 0.07 * S(t, P, 2, ph + 2.0) - 0.08 * adj
     for k, sg, ph in (('legL', 1, 0.6), ('legR', -1, 2.4)):
         l = p[k]
         dl = S(t, P, 1, ph) * 0.6 + S(t, P, 3, ph + 1) * 0.4
-        l['dir'] = add3(l['dir'], [0.03 * shift * sg, 0.06 * dl, 0])
-        l['knee'] += 0.08 * S(t, P, 2, ph + 0.4)
+        l['dir'] = add3(l['dir'], [0.04 * shift * sg, 0.1 * dl, 0])
+        l['knee'] += 0.14 * S(t, P, 2, ph + 0.4)
         l['point'] += 0.06 * S(t, P, 2, ph + 1.3)
     return p
 

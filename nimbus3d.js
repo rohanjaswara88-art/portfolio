@@ -127,7 +127,7 @@
       });
       const need = n => { if (!bones[n]) throw new Error('nimbus: bone missing ' + n); return bones[n]; };
       B = {
-        spine1: need('Bip001-Spine1'), spine2: need('Bip001-Spine2'), neck: need('Bip001-Neck'), head: need('Bip001-Head'),
+        pelvis: need('Bip001-Pelvis'), spine0: need('Bip001-Spine'), spine1: need('Bip001-Spine1'), spine2: need('Bip001-Spine2'), neck: need('Bip001-Neck'), head: need('Bip001-Head'),
         arm: [1, -1].map(s => {
           const k = s > 0 ? 'L' : 'R';
           return { side: s, upper: need('Bip001-' + k + '-UpperArm'), fore: need('Bip001-' + k + '-Forearm'), hand: need('Bip001-' + k + '-Hand') };
@@ -260,6 +260,68 @@
       return ray.ray.intersectsSphere(headSphere);
     }
 
+    // ---------- momentum layer: her body answers her real velocity, acceleration and turning ----------
+    // Damped springs stepped in fixed 1/120 s slices (frame-rate independent). The core leans into the
+    // acceleration first; the head re-levels a beat later; arms then forearms, thighs then shins trail
+    // behind and settle with a little overshoot; on a turn the hips lead and the chest and head counter.
+    const MS = (w, z) => ({ x: V(), v: V(), w, z });
+    const MO = { core: MS(6.5, 0.8), head: MS(3.6, 0.85), arm: MS(4.2, 0.42), fore: MS(3.1, 0.38),
+                 leg: MS(3.6, 0.5), shin: MS(2.7, 0.42), twist: MS(5, 0.7) };
+    const mA = V(), mVel = V(), mPrev = V(), mAcc = V(), mDrive = V(), mAx = V(), mTw = V(), mH = V(), UPV = V(0, 1, 0);
+    let mPrevYaw = null, mInit = false;
+    function springStep(s, target, dt) {
+      for (let t = dt; t > 1e-6;) {
+        const h = Math.min(1 / 120, t); t -= h;
+        mA.copy(target).sub(s.x).multiplyScalar(s.w * s.w).addScaledVector(s.v, -2 * s.z * s.w);
+        s.v.addScaledVector(mA, h); s.x.addScaledVector(s.v, h);
+      }
+    }
+    function tiltToward(bone, vec, k, max) {       // tip a bone's far end toward a (world) direction
+      mH.set(vec.x, 0, vec.z);
+      const m = mH.length(); if (m < 1e-4) return;
+      mAx.crossVectors(UPV, mH).normalize();
+      rotateWorld(bone, mAx, Math.sign(k) * Math.min(max, m * Math.abs(k)));
+    }
+    function momentum(tp, dt, yaw, cmPerPx) {
+      const vp = tp.velPx || [0, 0];
+      mVel.set(vp[0] * cmPerPx, -vp[1] * cmPerPx, 0);
+      if (!mInit) { mPrev.copy(mVel); mPrevYaw = yaw; mInit = true; }
+      if (dt > 0) {
+        mAcc.copy(mVel).sub(mPrev).multiplyScalar(1 / dt);
+        mPrev.copy(mVel);
+        // what the body feels: acceleration plus air drag at speed (both in rough "g" units)
+        mDrive.copy(mAcc).multiplyScalar(1 / 700).addScaledVector(mVel, 0.35 / 300).clampLength(0, 1.3);
+        springStep(MO.core, mDrive, dt);
+        springStep(MO.head, MO.core.x, dt);
+        springStep(MO.arm, mDrive, dt);
+        springStep(MO.fore, MO.arm.x, dt);
+        springStep(MO.leg, mDrive, dt);
+        springStep(MO.shin, MO.leg.x, dt);
+        const yr = Math.max(-6, Math.min(6, (yaw - mPrevYaw) / dt)); mPrevYaw = yaw;
+        springStep(MO.twist, mTw.set(Math.max(-0.35, Math.min(0.35, yr * 0.12)), 0, 0), dt);
+      }
+      const c = MO.core.x, hd = MO.head.x, ar = MO.arm.x, fo = MO.fore.x, lg = MO.leg.x, sh = MO.shin.x, tw = MO.twist.x.x;
+      // core: the torso leans into the push, spread down the spine (hips least, chest most);
+      // pushing up compresses (a little forward flex), dropping opens the chest
+      [[B.pelvis, 0.07], [B.spine0, 0.09], [B.spine1, 0.12], [B.spine2, 0.13]].forEach(([b, k]) => tiltToward(b, c, k, 0.16));
+      rotateWorld(B.spine1, SIDE, c.y * 0.06); rotateWorld(B.spine2, SIDE, c.y * 0.05);
+      // head stabilisation: it rides with the chest, then re-levels (keeps her eyes steady)
+      tiltToward(B.neck, hd, -0.16, 0.2); tiltToward(B.head, hd, -0.2, 0.24);
+      // turning: hips lead, chest and head counter-rotate
+      rotateWorld(B.pelvis, AY, tw); rotateWorld(B.spine2, AY, -0.5 * tw); rotateWorld(B.neck, AY, -0.25 * tw); rotateWorld(B.head, AY, -0.2 * tw);
+      // limbs trail the push and swing back with overshoot; dropping lifts the arms out, rising tucks them in
+      B.arm.forEach(a => {
+        tiltToward(a.upper, ar, 0.55, 0.5);
+        rotateWorld(a.upper, FWD, a.side * -ar.y * 0.3);
+        tiltToward(a.fore, fo, 0.45, 0.45);
+      });
+      B.leg.forEach(l => {
+        tiltToward(l.thigh, lg, 0.45, 0.45);
+        tiltToward(l.calf, sh, 0.4, 0.4);
+        rotateWorld(l.calf, SIDE, -Math.max(-0.4, Math.min(0.4, sh.y * 0.35)));   // rising: knees fold under
+      });
+    }
+
     // ---------- one frame from the expression state ----------
     const AY = V(0, 1, 0), FWD = V(), SIDE = V(), PIVOT = V(0, HIP, 0);
     const headTurn = new THREE.Quaternion();
@@ -290,8 +352,7 @@
       let cp = null;
       if (clipW > 0) { player.play(tp.state, T); cp = player.sample(T); }
       const bodyPitch = cp ? pitch * (1 - clipW) + (cp.pitch + (player.state === 'hover' ? 0.25 * tp.speed : 0)) * clipW : pitch;
-      const hopLean = M && tp.state === 'hover' ? 0.18 * tp.speed : 0;          // short hops: lean into the move
-      model.rotation.set(M ? hopLean : bodyPitch, yaw, tp.roll + (cp ? cp.roll * clipW : 0));
+      model.rotation.set(M ? 0 : bodyPitch, yaw, tp.roll + (cp ? cp.roll * clipW : 0));
       model.position.copy(PIVOT).sub(PIVOT.clone().applyEuler(model.rotation));
       if (!M) model.position.y += tp.bob * Math.sin(T * 2.2);
       FWD.set(Math.sin(yaw), 0, Math.cos(yaw)); SIDE.set(Math.cos(yaw), 0, -Math.sin(yaw));
@@ -300,6 +361,7 @@
 
       // body: breathing, idle sway, scroll bank + shake, lean
       const shake = Math.sin(T * 58) * st.sh * 1.2;
+      if (M) momentum(tp, Math.min(0.1, fdt), yaw, 2 * lerp(FRAME.halfHeight, FULL.halfHeight, tp.zoom) / Math.max(1, canvas.clientHeight));
       const own = M ? 0 : 1;                   // the clips already breathe and sway
       rotateWorld(B.spine1, FWD, -(st.bank + st.tilt * 0.6 + own * Math.sin(T * 0.8) * 0.8 - shake) * DEG);
       rotateWorld(B.spine1, SIDE, (st.lean - 1) * 1.8 + own * Math.sin(T * 1.5) * 0.012 - belt * 0.06);
@@ -342,7 +404,8 @@
         [0, 1].forEach(i => {
           const bone = i ? a.fore : a.upper, child = i ? a.hand : a.fore;
           if (react > 0.01) aimBlend(bone, child, armLocal(w, i, a.side, NO_TOUR, T, null, 0).applyQuaternion(model.quaternion), react);
-          if (tp.point > 0 && a.side === tp.pointSide) aimBlend(bone, child, (i === 0 ? pointW.clone().add(V(0, -0.25, 0)) : pointW.clone()).normalize(), tp.point);
+          // pointing: the upper arm stays lower and closer to the body so the elbow keeps a natural bend
+          if (tp.point > 0 && a.side === tp.pointSide) aimBlend(bone, child, (i === 0 ? pointW.clone().multiplyScalar(0.8).add(V(-a.side * 0.12, -0.6, 0)) : pointW.clone()).normalize(), tp.point * (i === 0 ? 0.9 : 1));
         });
       });
       else B.arm.forEach(a => {

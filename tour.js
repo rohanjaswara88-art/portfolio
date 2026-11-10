@@ -283,7 +283,7 @@
   }
   // a real flight: crouch, spring off, follow a curved arc (speeding up, then braking), flare and settle.
   // Her facing, lean, banking, wind and trail all come from the actual motion in tick().
-  async function flyToSpot(spot) {
+  async function flyToSpot(spot, opts = {}) {
     const d = Math.hypot(spot.x - pos.x, spot.y - pos.y);
     if (d < 6) return;
     const { h } = size();
@@ -296,7 +296,7 @@
     tween(pose, { point: 0, wave: 0, duration: 0.25 });
     // long trips play the keyed take-off (gather, spring) which flows into the glide loop;
     // short hops stay in the hover clip and just lean with the speed
-    if (long) { pose.state = 'takeoff'; await sleep(420); }
+    if (long && !opts.entering) { pose.state = 'takeoff'; await sleep(420); }   // entering: already gliding
     flying = true;
     const path = { t: 0 };
     await tween(path, {
@@ -305,7 +305,7 @@
         const t = path.t, u = 1 - t;
         pos.x = u * u * u * p0.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * spot.x;
         pos.y = u * u * u * p0.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * spot.y;
-        if (long && t > 0.64 && pose.state !== 'land' && pose.state !== 'hover') pose.state = 'land';   // flare, absorb, settle
+        if (long && !opts.exiting && t > 0.64 && pose.state !== 'land' && pose.state !== 'hover') pose.state = 'land';   // flare, absorb, settle
       }
     });
     flying = false;
@@ -487,7 +487,7 @@
     pose.speed = clamp(sp / TOP_SPEED, 0, 1);
     pose.vel = sp > 4 ? [motion.vx / sp, motion.vy / sp] : [0, 0];
     pose.velPx = [motion.vx, motion.vy];
-    if (flying) pose.yaw += (clamp(motion.vx / 280, -1, 1) * 1.15 - pose.yaw) * 0.12;     // turn toward where she's going
+    if (flying) pose.yaw += (clamp(motion.vx / 280, -1, 1) * 0.85 - pose.yaw) * 0.12;     // turn toward where she's going
     const ax = (motion.vx - prevVx) / dt;
     pose.roll += ((flying ? clamp(-ax / 9000, -0.22, 0.22) : 0) - pose.roll) * 0.08;       // bank into speed changes
     hairSwing += (clamp(-motion.vx / 70, -14, 14) - hairSwing) * 0.12;
@@ -505,25 +505,22 @@
     document.body.classList.add('touring');
     RJ.lenis.stop();
 
-    const r = nb.getBoundingClientRect();
-    home = { x: r.left + r.width / 2, y: r.top + r.height / 2, h: r.height };
+    // she isn't on the page until now: she glides in from off-screen right at full size
+    const H = tourHeight();
+    nb.style.right = 'auto'; nb.style.bottom = 'auto'; nb.style.height = H + 'px';
+    const W = nb.offsetWidth || H * 0.75;
+    home = { x: innerWidth + W * 0.7, y: innerHeight * 0.42, h: H };
     pos.x = lastX = home.x; pos.y = home.y;
     motion.lx = pos.x; motion.ly = pos.y; motion.vx = motion.vy = 0; motion.lt = 0;
-    cur.x = home.x - r.width * 0.3; cur.y = home.y - r.height * 0.2;
+    cur.x = innerWidth * 0.6; cur.y = innerHeight * 0.4;
+    Object.assign(pose, { zoom: 1, bob: 2.2, state: 'glide', yaw: -0.85, talk: 0, point: 0, wave: 0 });
     gsap.set(nb, { opacity: 1 });
-    nb.style.right = 'auto'; nb.style.bottom = 'auto'; nb.style.height = r.height + 'px';
-    pose.yaw = RJ.nimbus && RJ.nimbus.restYaw != null ? RJ.nimbus.restYaw : -0.38;
     gsap.ticker.add(tick);
     tick();
     bar.classList.add('on');
     gsap.to(cursorEl, { opacity: 1, duration: 0.4 });
     updateBar();
-
-    // lift off: she grows, the camera pulls back to show her whole body, and she starts to float
-    await Promise.all([
-      tween(pose, { zoom: 1, bob: 2.2, duration: 1.1, ease: 'power2.inOut' }),
-      new Promise(res => gsap.to(nb, { height: tourHeight(), duration: 1.1, ease: 'power2.inOut', onComplete: res }))
-    ]);
+    await flyToSpot({ x: innerWidth * (narrow() ? 0.7 : 0.74), y: innerHeight * 0.5 }, { entering: true });
 
     while (idx < STEPS.length && !stopReq) {
       updateBar();
@@ -543,16 +540,10 @@
     showBubble(false);
     gsap.to(cursorEl, { opacity: 0, duration: 0.3 });
     bar.classList.remove('on');
-    // fly home, shrink back into the corner framing
+    // farewell done: she flies off-screen and is gone until AI Auto is pressed again
     look.x = 0; look.y = 0.05; look.smile = 1.2;
-    const hx = home.x, hy = innerHeight - home.h / 2;
-    const homeH = home.h;
-    await Promise.all([
-      flyToSpot({ x: hx, y: hy }),
-      new Promise(res => gsap.to(nb, { height: homeH, duration: 1.4, ease: 'power2.inOut', onComplete: res })),
-      tween(pose, { zoom: 0, bob: 0, duration: 1.4, ease: 'power2.inOut' })
-    ]);
-    await tween(pose, { fly: 0, yaw: RJ.nimbus && RJ.nimbus.restYaw != null ? RJ.nimbus.restYaw : -0.38, duration: 0.4 });
+    await flyToSpot({ x: innerWidth + (nb.offsetWidth || 300) * 0.8, y: innerHeight * 0.3 }, { exiting: true });
+    gsap.set(nb, { opacity: 0 });
     gsap.ticker.remove(tick);
     nb.style.left = nb.style.top = nb.style.right = nb.style.bottom = nb.style.height = '';
     pose.yaw = null; pose.talk = 0; pose.speed = 0; pose.vel = [0, 0]; pose.roll = 0; pose.crouch = pose.flare = 0; pose.state = 'hover'; pose.velPx = [0, 0]; hairSwing = 0;

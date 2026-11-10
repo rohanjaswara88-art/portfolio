@@ -1815,13 +1815,11 @@ h2 [data-split]:last-child:not(:first-child) { font-family: "Instrument Serif", 
     if (!reduceMotion) {
       gsap.ticker.add((time, dtms) => {
         const dt = Math.min(0.05, (dtms || 16) / 1000);
-        think(dt); step(dt); render();
+        think(dt); step(dt); if (touring()) render();   // hidden (and not drawn) outside the tour
       });
       gsap.delayedCall(4.6, () => { ready = true; lastScroll = lenis.scroll; });
     }
-    gsap.fromTo(nb, { opacity: 0, y: 36 }, { opacity: 1, y: 0, duration: 1.5, ease: 'power3.out', delay: reduceMotion ? 0 : 3.3 });
-    render();
-    if (reduceMotion) gsap.set(nb, { opacity: 1 });
+    // she stays hidden until the AI Auto tour brings her in (tour.js)
   }
 
   // =====================================================================
