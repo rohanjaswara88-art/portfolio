@@ -60,3 +60,10 @@ body.touring .ret { opacity: 0 !important; }
   box-shadow: 0 0 22px rgba(255, 190, 90, 0.9);
 }
 .tour-cursor.down { transform: scale(0.65); }
+
+/* wind trail behind her while she flies */
+.tour-spark {
+  position: fixed; left: 0; top: 0; z-index: 59; width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px;
+  border-radius: 50%; pointer-events: none; opacity: 0;
+  background: radial-gradient(circle, #fff 0 25%, rgba(255, 220, 150, 0.85) 45%, rgba(170, 215, 255, 0) 72%);
+}

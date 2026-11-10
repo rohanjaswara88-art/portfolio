@@ -97,7 +97,11 @@
   // =====================================================================
   //  STATE (read by the mascot script every frame)
   // =====================================================================
-  const pose = { zoom: 0, fly: 0, yaw: null, bob: 0, point: 0, pointSide: 1, pointDir: [0, 0, 1], wave: 0, waveSide: 1, talk: 0 };
+  const pose = { zoom: 0, fly: 0, yaw: null, bob: 0, point: 0, pointSide: 1, pointDir: [0, 0, 1], wave: 0, waveSide: 1, talk: 0,
+    speed: 0, vel: [0, 0], crouch: 0, flare: 0, roll: 0 };
+  const TOP_SPEED = 950;            // px/s that counts as full speed (lean, wind, trail)
+  const motion = { vx: 0, vy: 0, lx: 0, ly: 0, lt: 0, lastSpark: 0 };
+  let flying = false;
   const look = { x: 0, y: 0.05, smile: 1.2, smirk: 0 };
   let active = false, paused = false, skip = false, backReq = false, stopReq = false;
   let idx = 0, curSec = null, graphP = 0, home = null, hairSwing = 0, speaking = false, typing = false;
@@ -277,14 +281,41 @@
     else x = tx < innerWidth / 2 ? innerWidth - w * 0.34 : w * 0.34;
     return clampSpot(x, ty + h * (0.5 - SHOULDER));
   }
+  // a real flight: crouch, spring off, follow a curved arc (speeding up, then braking), flare and settle.
+  // Her facing, lean, banking, wind and trail all come from the actual motion in tick().
   async function flyToSpot(spot) {
     const d = Math.hypot(spot.x - pos.x, spot.y - pos.y);
     if (d < 6) return;
-    const dir = spot.x >= pos.x ? 1 : -1;
-    tween(pose, { fly: clamp(d / 260, 0.35, 1), yaw: dir * 1.15, point: 0, wave: 0, duration: 0.35, ease: 'power2.out' });
+    const { h } = size();
+    const p0 = { x: pos.x, y: pos.y }, long = d > 150;
+    const lift = Math.min(170, d * 0.28) * (long ? 1 : 0.4);
+    const minY = HUD_H + h * 0.3;
+    const c1 = { x: p0.x + (spot.x - p0.x) * 0.3, y: Math.max(minY, p0.y + (spot.y - p0.y) * 0.3 - lift) };
+    const c2 = { x: p0.x + (spot.x - p0.x) * 0.75, y: Math.max(minY, p0.y + (spot.y - p0.y) * 0.75 - lift * 0.8) };
     look.x = 0; look.y = 0.05;
-    await tween(pos, { x: spot.x, y: spot.y, duration: clamp(d / 650, 0.6, 1.7), ease: 'power2.inOut' });
-    await tween(pose, { fly: 0, yaw: 0, duration: 0.4, ease: 'power2.out' });
+    tween(pose, { point: 0, wave: 0, duration: 0.25 });
+    if (long) await tween(pose, { crouch: 1, duration: 0.24, ease: 'power2.out' });   // anticipation
+    flying = true;
+    tween(pose, { crouch: 0, fly: 1, duration: 0.35, ease: 'back.out(2)' });               // spring off
+    const path = { t: 0 };
+    await tween(path, {
+      t: 1, duration: clamp(d / 620, 0.75, 2.1), ease: 'sine.inOut',
+      onUpdate: () => {
+        const t = path.t, u = 1 - t;
+        pos.x = u * u * u * p0.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * spot.x;
+        pos.y = u * u * u * p0.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * spot.y;
+        pose.flare = long ? clamp((t - 0.7) / 0.25, 0, 1) : 0;                             // braking: legs swing under
+      }
+    });
+    flying = false;
+    // touchdown on air: a small dip and bounce while the body straightens
+    await Promise.all([
+      tween(pose, { fly: 0, flare: 0, duration: 0.6, ease: 'power2.out' }),
+      (async () => {
+        await tween(pos, { y: spot.y + (long ? 9 : 4), duration: 0.18, ease: 'power1.out' });
+        await tween(pos, { y: spot.y, duration: 0.5, ease: 'back.out(2.2)' });
+      })()
+    ]);
   }
   async function presentTo(r) {
     const { h } = size();
@@ -298,6 +329,18 @@
     await tween(pose, { yaw: clamp(dx / innerWidth * 1.4, -0.75, 0.75), point: 1, duration: 0.5, ease: 'power2.out' });
   }
   const faceViewer = () => { look.x = 0; look.y = 0.05; return tween(pose, { yaw: 0, point: 0, duration: 0.45 }); };
+
+  // wind trail: small glowing sparks left behind her while she flies fast
+  const sparks = Array.from({ length: 22 }, () => mk('tour-spark tour-ui'));
+  let sparkI = 0;
+  function spark() {
+    const el = sparks[sparkI++ % sparks.length], { h } = size();
+    const x = pos.x - pose.vel[0] * 30 + (Math.random() - 0.5) * 26;
+    const y = pos.y - h * 0.05 - pose.vel[1] * 30 + (Math.random() - 0.5) * h * 0.35;
+    gsap.killTweensOf(el);
+    gsap.fromTo(el, { x, y, opacity: 0.95, scale: 0.6 + Math.random() * 0.8 },
+      { x: x - motion.vx * 0.18, y: y - motion.vy * 0.18 + 14, opacity: 0, scale: 0.15, duration: 0.6 + Math.random() * 0.4, ease: 'power2.out' });
+  }
 
   // =====================================================================
   //  SECTIONS
@@ -435,8 +478,22 @@
     if (!active) return;
     nb.style.left = (pos.x - nb.offsetWidth / 2).toFixed(1) + 'px';
     nb.style.top = (pos.y - nb.offsetHeight / 2).toFixed(1) + 'px';
-    const vx = (pos.x - lastX) * 60; lastX = pos.x;
-    hairSwing += (clamp(-vx / 70, -14, 14) - hairSwing) * 0.12;
+    lastX = pos.x;
+    // her real motion -> speed, direction, facing, banking
+    const now = performance.now(), dt = clamp((now - (motion.lt || now - 16)) / 1000, 0.001, 0.1);
+    motion.lt = now;
+    const prevVx = motion.vx;
+    motion.vx += ((pos.x - motion.lx) / dt - motion.vx) * 0.3;
+    motion.vy += ((pos.y - motion.ly) / dt - motion.vy) * 0.3;
+    motion.lx = pos.x; motion.ly = pos.y;
+    const sp = Math.hypot(motion.vx, motion.vy);
+    pose.speed = clamp(sp / TOP_SPEED, 0, 1);
+    pose.vel = sp > 4 ? [motion.vx / sp, motion.vy / sp] : [0, 0];
+    if (flying) pose.yaw += (clamp(motion.vx / 280, -1, 1) * 1.15 - pose.yaw) * 0.12;     // turn toward where she's going
+    const ax = (motion.vx - prevVx) / dt;
+    pose.roll += ((flying ? clamp(-ax / 9000, -0.22, 0.22) : 0) - pose.roll) * 0.08;       // bank into speed changes
+    hairSwing += (clamp(-motion.vx / 70, -14, 14) - hairSwing) * 0.12;
+    if (flying && pose.speed > 0.3 && now - motion.lastSpark > 40) { motion.lastSpark = now; spark(); }
     const target = speaking || (!voiceOn && typing) ? 1 : 0;
     pose.talk += (target - pose.talk) * 0.25;
     cursorEl.style.transform = 'translate(' + cur.x.toFixed(1) + 'px,' + cur.y.toFixed(1) + 'px)';
@@ -453,6 +510,7 @@
     const r = nb.getBoundingClientRect();
     home = { x: r.left + r.width / 2, y: r.top + r.height / 2, h: r.height };
     pos.x = lastX = home.x; pos.y = home.y;
+    motion.lx = pos.x; motion.ly = pos.y; motion.vx = motion.vy = 0; motion.lt = 0;
     cur.x = home.x - r.width * 0.3; cur.y = home.y - r.height * 0.2;
     gsap.set(nb, { opacity: 1 });
     nb.style.right = 'auto'; nb.style.bottom = 'auto'; nb.style.height = r.height + 'px';
@@ -492,17 +550,14 @@
     const hx = home.x, hy = innerHeight - home.h / 2;
     const homeH = home.h;
     await Promise.all([
-      (async () => {
-        await tween(pose, { fly: 0.8, yaw: hx >= pos.x ? 1.15 : -1.15, point: 0, wave: 0, duration: 0.3 });
-        await tween(pos, { x: hx, y: hy, duration: 1.3, ease: 'power2.inOut' });
-      })(),
+      flyToSpot({ x: hx, y: hy }),
       new Promise(res => gsap.to(nb, { height: homeH, duration: 1.4, ease: 'power2.inOut', onComplete: res })),
       tween(pose, { zoom: 0, bob: 0, duration: 1.4, ease: 'power2.inOut' })
     ]);
     await tween(pose, { fly: 0, yaw: RJ.nimbus && RJ.nimbus.restYaw != null ? RJ.nimbus.restYaw : -0.38, duration: 0.4 });
     gsap.ticker.remove(tick);
     nb.style.left = nb.style.top = nb.style.right = nb.style.bottom = nb.style.height = '';
-    pose.yaw = null; pose.talk = 0; hairSwing = 0;
+    pose.yaw = null; pose.talk = 0; pose.speed = 0; pose.vel = [0, 0]; pose.roll = 0; pose.crouch = pose.flare = 0; hairSwing = 0;
     document.body.classList.remove('touring');
     active = false;
     RJ.lenis.start();

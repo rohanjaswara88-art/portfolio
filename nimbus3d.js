@@ -35,9 +35,23 @@
     hips:  [V(0.85, -0.7, -0.15), V(-0.75, -0.75, 0.2)], // hands on hips: annoyed
     fly:   [V(0.3, -1, -0.5), V(0.15, -1, -0.65)]        // gliding: arms swept back
   };
-  const LEG_FLY = [V(0.06, -1, -0.2), V(0, -0.75, -0.66)];  // thigh, calf: knees bent back while gliding
+  // leg poses in her body space (x = her left): [thigh -> knee, calf -> ankle]
+  const LEG = {
+    fly:    [V(0.06, -1, -0.2), V(0, -0.75, -0.66)],    // gliding: knees bent back
+    crouch: [V(0.08, -0.65, 0.75), V(0, -1, -0.25)],    // take-off: knees pulled up
+    flare:  [V(0.06, -1, 0.4), V(0, -1, 0.12)],         // landing: legs swing under her
+    hover:  [V(0.05, -1, 0.02), V(0, -1, -0.14)]        // floating: relaxed, slightly bent
+  };
+  const ARM_EXTRA = {
+    crouch: [V(0.2, -1, 0.35), V(0.1, -0.9, 0.55)],
+    flare:  [V(0.75, -0.45, 0.45), V(0.55, -0.25, 0.7)], // arms out to catch herself
+    reach:  [V(0.12, 1, 0.1), V(0.05, 1, 0.12)],         // climbing: one fist up
+    fast:   [V(0.22, -1, -0.95), V(0.1, -1, -1)]         // top speed: arms swept far back
+  };
+  const WIND_BEND = 1.0;            // radians a cloth chain bends at full speed
   // "tour" input from tour.js: whole-body poses on top of the expression state
-  const NO_TOUR = { zoom: 0, fly: 0, yaw: null, bob: 0, point: 0, pointSide: 1, pointDir: [0, 0, 1], wave: 0, waveSide: 1, talk: 0 };
+  const NO_TOUR = { zoom: 0, fly: 0, yaw: null, bob: 0, point: 0, pointSide: 1, pointDir: [0, 0, 1], wave: 0, waveSide: 1, talk: 0,
+    speed: 0, vel: [0, 0], crouch: 0, flare: 0, roll: 0 };
   const lerp = (a, b, t) => a + (b - a) * t;
 
   function angerTexture() {
@@ -73,7 +87,7 @@
     anger.renderOrder = 10; scene.add(anger);
 
     let model = null, B = null, rest = null;
-    const hair = [];
+    const hair = [], cloth = [];       // cloth = coat tails, chains, trouser panels, rope, hair strands (wind)
     const loader = new THREE.GLTFLoader();
     if (THREE.DRACOLoader) { const d = new THREE.DRACOLoader(); d.setDecoderPath(DRACO_PATH); loader.setDRACOLoader(d); }
     loader.load(url, gltf => {
@@ -102,6 +116,19 @@
       Object.keys(bones).forEach(n => {          // hair chains: the first two links of every strand
         const m = /^Bn_([FB])_hair(?:_mawei|\d+_)(0[01])$/.exec(n);
         if (m) hair.push({ bone: bones[n], back: m[1] === 'B', braid: n.includes('mawei'), link: +m[2], r1: Math.random() * 2 - 1, r2: Math.random() * 2 - 1, ph: Math.random() * 6.28 });
+      });
+      // chains that stream in the wind while she flies: group links by chain, root first
+      const chains = {};
+      Object.keys(bones).forEach(n => {
+        let m = /^(Bone_Chain_[FH]|Bn_[BL]_legpd_[AB]|Bn_[RB]_pigu_pd_[AB]|Bn_F_shengzi_A)(\d\d)$/.exec(n);
+        let k = 1;
+        if (!m) { m = /^(Bn_[FB]_hair(?:_mawei|\d+_))(\d\d)$/.exec(n); k = 0.55; if (m && +m[2] > 3) m = null; }
+        if (m) (chains[m[1]] = chains[m[1]] || []).push({ bone: bones[n], link: +m[2], k });
+      });
+      Object.values(chains).forEach(list => {
+        list.sort((a, b) => a.link - b.link);
+        const n = list.length, ph = Math.random() * 6.28;
+        list.forEach((c, i) => cloth.push({ bone: c.bone, k: c.k, i, share: 2 * (i + 1) / (n * (n + 1)), ph }));
       });
       rest = new Map();
       Object.values(bones).forEach(b => rest.set(b, { p: b.position.clone(), q: b.quaternion.clone() }));
@@ -141,6 +168,11 @@
       const d = ARM.rest[i].clone().multiplyScalar(Math.max(0, 1 - w.brace - w.hips))
         .addScaledVector(ARM.brace[i], w.brace).addScaledVector(ARM.hips[i], w.hips);
       if (tp.fly > 0) d.normalize().lerp(ARM.fly[i], tp.fly);
+      if (tp.fly > 0 && tp.speed > 0) d.normalize().lerp(ARM_EXTRA.fast[i], tp.fly * tp.speed * 0.6);
+      if (tp.crouch > 0) d.normalize().lerp(ARM_EXTRA.crouch[i], tp.crouch);
+      if (tp.flare > 0) d.normalize().lerp(ARM_EXTRA.flare[i], tp.flare);
+      const climb = Math.max(0, -tp.vel[1]) * tp.speed * tp.fly;
+      if (climb > 0.05 && side === 1) d.normalize().lerp(ARM_EXTRA.reach[i], Math.min(1, climb * 1.6));
       if (tp.wave > 0 && side === tp.waveSide) {
         const wave = i === 0 ? V(0.8, 0.6, 0.25) : V(0.15 + 0.38 * Math.sin(T * 9), 1, 0.2);
         d.normalize().lerp(wave, tp.wave);
@@ -193,9 +225,13 @@
       const st = f.st, T = f.T, touch = f.touch || 0;
       rest.forEach((r, b) => { b.position.copy(r.p); b.quaternion.copy(r.q); });
 
-      // whole body: facing, forward pitch while flying (around her hips), floating bob
+      // whole body: facing, lean from speed (more when flying sideways), nose up when climbing,
+      // tuck on take-off, flare back on landing; pivot = her hips; floating bob
       const yaw = tp.yaw == null ? BODY_YAW : tp.yaw;
-      model.rotation.set(tp.fly * 0.55, yaw, 0);
+      const side = Math.abs(tp.vel[0]), up = -tp.vel[1];
+      const pitch = tp.fly * (0.12 + 0.55 * tp.speed * (0.35 + 0.65 * side)) - up * tp.speed * tp.fly * 0.25
+        + tp.crouch * 0.25 - tp.flare * 0.4;
+      model.rotation.set(pitch, yaw, tp.roll);
       model.position.copy(PIVOT).sub(PIVOT.clone().applyEuler(model.rotation));
       model.position.y += tp.bob * Math.sin(T * 2.2);
       FWD.set(Math.sin(yaw), 0, Math.cos(yaw)); SIDE.set(Math.cos(yaw), 0, -Math.sin(yaw));
@@ -245,10 +281,21 @@
         aim(a.fore, a.hand, dirs[1]);
       });
 
-      // legs trail behind while she flies
-      if (tp.fly > 0.01) B.leg.forEach(l => {
-        aimBlend(l.thigh, l.calf, LEG_FLY[0].clone().multiply(V(l.side, 1, 1)).normalize().applyQuaternion(model.quaternion), tp.fly);
-        aimBlend(l.calf, l.foot, LEG_FLY[1].clone().normalize().applyQuaternion(model.quaternion), tp.fly);
+      // legs: slow kicks while gliding, tucked on take-off, swung under on landing, relaxed while hovering
+      const hoverW = tp.zoom * 0.6 * (1 - tp.fly);
+      const legW = { fly: tp.fly, crouch: tp.crouch, flare: tp.flare, hover: hoverW };
+      const legSum = legW.fly + legW.crouch + legW.flare + legW.hover;
+      if (legSum > 0.01) B.leg.forEach(l => {
+        const kick = Math.sin(T * 2.4 + l.side * 1.7), dangle = Math.sin(T * 1.4 + l.side);
+        [0, 1].forEach(i => {
+          const d = V();
+          Object.keys(legW).forEach(k => { if (legW[k] > 0) d.addScaledVector(LEG[k][i], legW[k]); });
+          if (i === 0) { d.z += 0.18 * kick * tp.fly + 0.06 * dangle * hoverW; d.x *= l.side; }
+          else d.z += 0.15 * Math.sin(T * 2.4 + l.side * 1.7 + 0.8) * tp.fly;
+          d.normalize().applyQuaternion(model.quaternion);
+          if (i === 0) aimBlend(l.thigh, l.calf, d, Math.min(1, legSum));
+          else aimBlend(l.calf, l.foot, d, Math.min(1, legSum));
+        });
       });
 
       // hair: swings behind her (spring in st.hs) and gets ruffled when messy
@@ -259,6 +306,21 @@
         rotateWorld(h.bone, FWD, (swing * (h.back ? 1.4 : 0.7) + mess * 0.22 * h.r1 + jit) * k);
         rotateWorld(h.bone, SIDE, (mess * 0.16 * h.r2 + Math.sin(T * 1.2 + h.ph) * 0.02) * k);
       });
+
+      // wind: coat tails, chains, trouser panels, rope and hair stream opposite to her motion and flutter;
+      // while she floats they sway gently
+      const wind = V(-tp.vel[0], tp.vel[1], 0).multiplyScalar(tp.speed);
+      const windAmt = Math.min(1, wind.length());
+      if (cloth.length && (windAmt > 0.02 || tp.zoom > 0.01)) {
+        model.updateMatrixWorld(true);
+        let axis = V(0, -1, 0).cross(wind);
+        if (axis.length() < 0.15) axis = SIDE.clone().multiplyScalar(wind.y >= 0 ? -1 : 1); else axis.normalize();
+        cloth.forEach(c => {
+          const flutter = Math.sin(T * 9 + c.i * 0.8 + c.ph) * 0.07 * windAmt;
+          rotateWorld(c.bone, axis, (WIND_BEND * windAmt * c.share * 1.0 + flutter) * c.k);
+          rotateWorld(c.bone, SIDE, Math.sin(T * 1.3 + c.ph + c.i * 0.4) * 0.025 * tp.zoom * c.k);
+        });
+      }
 
       // anger mark floats by her head and pulses
       B.head.getWorldPosition(anger.position);
