@@ -18,6 +18,8 @@
 
   const DEG = Math.PI / 180;
   const FRAME = { centerY: 139, halfHeight: 46, fov: 20 };   // model units are cm: waist to just above the head
+  const FULL = { centerY: 92, halfHeight: 104 };              // tour framing: her whole body (she flies around)
+  const HIP = 100;                                            // cm: she pitches forward around her hips when flying
   const BODY_YAW = -0.38;           // she stands turned a little toward the page content (to her left)
   const LID_TRAVEL = 1.45;          // cm the upper eyelid bones travel to fully shut the eye
   const HEAD_HIT_RADIUS = 14;       // cm, the "hair" zone around her head for the rub test
@@ -30,8 +32,13 @@
   const ARM = {
     rest:  [V(0.16, -1, 0.06), V(0.08, -1, 0.22)],
     brace: [V(0.32, -1, 0.3), V(-0.42, 0.3, 0.86)],     // forearms up in front of her, bracing
-    hips:  [V(0.85, -0.7, -0.15), V(-0.75, -0.75, 0.2)]  // hands on hips: annoyed
+    hips:  [V(0.85, -0.7, -0.15), V(-0.75, -0.75, 0.2)], // hands on hips: annoyed
+    fly:   [V(0.3, -1, -0.5), V(0.15, -1, -0.65)]        // gliding: arms swept back
   };
+  const LEG_FLY = [V(0.06, -1, -0.2), V(0, -0.75, -0.66)];  // thigh, calf: knees bent back while gliding
+  // "tour" input from tour.js: whole-body poses on top of the expression state
+  const NO_TOUR = { zoom: 0, fly: 0, yaw: null, bob: 0, point: 0, pointSide: 1, pointDir: [0, 0, 1], wave: 0, waveSide: 1, talk: 0 };
+  const lerp = (a, b, t) => a + (b - a) * t;
 
   function angerTexture() {
     const c = document.createElement('canvas'); c.width = c.height = 128;
@@ -84,7 +91,13 @@
         }),
         lids: ['BON_eyelid_up_L', 'BON_eyelid04_up_L', 'BON_eyelid05_up_L', 'BON_eyelid_up_R', 'BON_eyelid04_up_R', 'BON_eyelid05_up_R'].map(need),
         lowLids: ['BON_eyelid_lo_L', 'BON_eyelid_lo_R'].map(need),
-        cornerL: need('Bon_zuiba_L'), cornerR: need('Bon_zuiba_R')
+        cornerL: need('Bon_zuiba_L'), cornerR: need('Bon_zuiba_R'),
+        lowerLip: [['Bon_Lolip_M', 0.4], ['Bon_Lolip01_L', 0.3], ['Bon_Lolip01_R', 0.3], ['Bon_Lolip02_L', 0.15], ['Bon_Lolip02_R', 0.15], ['Bon_yachi_lo', 0.3]]
+          .map(([n, k]) => ({ bone: need(n), k })),
+        leg: [1, -1].map(s => {
+          const k = s > 0 ? 'L' : 'R';
+          return { side: s, thigh: need('Bip001-' + k + '-Thigh'), calf: need('Bip001-' + k + '-Calf'), foot: need('Bip001-' + k + '-Foot') };
+        })
       };
       Object.keys(bones).forEach(n => {          // hair chains: the first two links of every strand
         const m = /^Bn_([FB])_hair(?:_mawei|\d+_)(0[01])$/.exec(n);
@@ -93,6 +106,7 @@
       rest = new Map();
       Object.values(bones).forEach(b => rest.set(b, { p: b.position.clone(), q: b.quaternion.clone() }));
       model = gltf.scene;
+      model.rotation.order = 'YXZ';
       model.rotation.y = BODY_YAW;
       scene.add(model);
     }, undefined, err => { console.error('nimbus: model failed to load', err); });
@@ -122,11 +136,23 @@
       bone.parent.getWorldScale(ts);
       bone.position.set(r.p.x + tv.x / ts.x, r.p.y + tv.y / ts.y, r.p.z + tv.z / ts.z);
     }
-    function armDir(w, i, side) {
+    // an arm direction in her own body space (x = her left), blended between poses
+    function armLocal(w, i, side, tp, T) {
       const d = ARM.rest[i].clone().multiplyScalar(Math.max(0, 1 - w.brace - w.hips))
         .addScaledVector(ARM.brace[i], w.brace).addScaledVector(ARM.hips[i], w.hips);
+      if (tp.fly > 0) d.normalize().lerp(ARM.fly[i], tp.fly);
+      if (tp.wave > 0 && side === tp.waveSide) {
+        const wave = i === 0 ? V(0.8, 0.6, 0.25) : V(0.15 + 0.38 * Math.sin(T * 9), 1, 0.2);
+        d.normalize().lerp(wave, tp.wave);
+      }
       d.x *= side;
-      return d.normalize().applyAxisAngle(AY, BODY_YAW);
+      return d.normalize();
+    }
+    function aimBlend(bone, child, dirW, w) {       // turn a bone part of the way toward a world direction
+      bone.updateMatrixWorld(true);
+      bone.getWorldPosition(tv); child.getWorldPosition(tv2);
+      const cur = tv2.sub(tv).normalize();
+      aim(bone, child, cur.lerp(dirW, w).normalize());
     }
 
     // ---------- sizing + hit test ----------
@@ -152,13 +178,27 @@
     }
 
     // ---------- one frame from the expression state ----------
-    const AY = V(0, 1, 0), FWD = V(Math.sin(BODY_YAW), 0, Math.cos(BODY_YAW)), SIDE = V(Math.cos(BODY_YAW), 0, -Math.sin(BODY_YAW));
+    const AY = V(0, 1, 0), FWD = V(), SIDE = V(), PIVOT = V(0, HIP, 0);
     const headTurn = new THREE.Quaternion();
+    function frameCamera(zoom) {
+      const cy = lerp(FRAME.centerY, FULL.centerY, zoom), hh = lerp(FRAME.halfHeight, FULL.halfHeight, zoom);
+      camera.position.set(0, cy + 6 * (1 - zoom), hh / Math.tan(FRAME.fov / 2 * DEG));
+      camera.lookAt(0, cy, 0);
+    }
     function draw(f) {
       resize();
+      const tp = f.tour || NO_TOUR;
+      frameCamera(tp.zoom);
       if (!model) { renderer.render(scene, camera); return; }
       const st = f.st, T = f.T, touch = f.touch || 0;
       rest.forEach((r, b) => { b.position.copy(r.p); b.quaternion.copy(r.q); });
+
+      // whole body: facing, forward pitch while flying (around her hips), floating bob
+      const yaw = tp.yaw == null ? BODY_YAW : tp.yaw;
+      model.rotation.set(tp.fly * 0.55, yaw, 0);
+      model.position.copy(PIVOT).sub(PIVOT.clone().applyEuler(model.rotation));
+      model.position.y += tp.bob * Math.sin(T * 2.2);
+      FWD.set(Math.sin(yaw), 0, Math.cos(yaw)); SIDE.set(Math.cos(yaw), 0, -Math.sin(yaw));
       model.updateMatrixWorld(true);
       const mess = Math.max(0, Math.min(1.1, st.mess)), an = Math.max(0, st.anger), belt = clamp01(st.belt);
 
@@ -186,14 +226,29 @@
       const curve = (st.mc - st.flinch * 0.8) * 0.18, smirk = st.ms * 0.45;
       nudge(B.cornerL, headTurn, smirk * 0.3, curve + smirk, 0);
       nudge(B.cornerR, headTurn, 0, curve, 0);
+      // talking: the lower lip and jaw open and close in an uneven rhythm
+      const open = tp.talk * (0.3 + 0.7 * Math.abs(Math.sin(T * 13) * Math.sin(T * 7.3 + 1)));
+      if (open > 0.01) B.lowerLip.forEach(l => nudge(l.bone, headTurn, 0, -l.k * open, 0));
 
       // arms: rest -> brace (while you scroll) -> hands on hips (annoyed)
       const hips = clamp01(an * 1.4), w = { brace: clamp01(belt * (1 - hips)), hips };
+      const pointW = V().fromArray(tp.pointDir).normalize();
       B.arm.forEach(a => {
-        const d1 = armDir(w, 0, a.side);
-        d1.x += Math.sin(T * 0.8 + a.side) * 0.03;
-        aim(a.upper, a.fore, d1.normalize());
-        aim(a.fore, a.hand, armDir(w, 1, a.side));
+        const dirs = [0, 1].map(i => {
+          const d = armLocal(w, i, a.side, tp, T);
+          if (i === 0) d.x += Math.sin(T * 0.8 + a.side) * 0.03;
+          d.normalize().applyQuaternion(model.quaternion);
+          if (tp.point > 0 && a.side === tp.pointSide) d.lerp(i === 0 ? pointW.clone().add(V(0, -0.25, 0)) : pointW, tp.point);
+          return d.normalize();
+        });
+        aim(a.upper, a.fore, dirs[0]);
+        aim(a.fore, a.hand, dirs[1]);
+      });
+
+      // legs trail behind while she flies
+      if (tp.fly > 0.01) B.leg.forEach(l => {
+        aimBlend(l.thigh, l.calf, LEG_FLY[0].clone().multiply(V(l.side, 1, 1)).normalize().applyQuaternion(model.quaternion), tp.fly);
+        aimBlend(l.calf, l.foot, LEG_FLY[1].clone().normalize().applyQuaternion(model.quaternion), tp.fly);
       });
 
       // hair: swings behind her (spring in st.hs) and gets ruffled when messy
@@ -214,6 +269,6 @@
       renderer.render(scene, camera);
     }
 
-    return { draw, hitHair, resize };
+    return { draw, hitHair, resize, restYaw: BODY_YAW };
   };
 })();

@@ -468,6 +468,7 @@ h2 [data-split]:last-child:not(:first-child) { font-family: "Instrument Serif", 
     .sec { will-change: auto; }
   }
 </style>
+<link rel="stylesheet" href="tour.css">
 </head>
 <body>
 
@@ -486,6 +487,7 @@ h2 [data-split]:last-child:not(:first-child) { font-family: "Instrument Serif", 
     <a href="#contact" data-nav>Contact</a>
   </nav>
   <div class="tools">
+    <button class="btn-pill glass ai-auto" data-ai-auto type="button" aria-label="AI Auto: guided tour of this website">&#10022; AI Auto</button>
     <button class="btn-pill glass" id="sound" aria-pressed="false" type="button">Sound off</button>
     <button class="btn-pill glass menu-btn" id="menuBtn" aria-expanded="false" aria-controls="menu" type="button">Menu</button>
   </div>
@@ -501,6 +503,7 @@ h2 [data-split]:last-child:not(:first-child) { font-family: "Instrument Serif", 
   <a href="#flow" data-nav>Flow</a>
   <a href="#graph" data-nav>System</a>
   <a href="#contact" data-nav>Contact</a>
+  <a href="#" data-ai-auto>&#10022; AI Auto tour</a>
 </div>
 
 <div id="zoomSpacer" aria-hidden="true"></div>
@@ -665,6 +668,7 @@ h2 [data-split]:last-child:not(:first-child) { font-family: "Instrument Serif", 
 
   <!-- NIMBUS: the mascot, a rigged 3D model (nimbus3d.js + models/daffodill.glb) -->
   <div class="nimbus" id="nimbus" aria-hidden="true"><canvas id="nbCanvas"></canvas></div>
+  <button class="ai-fab glass" data-ai-auto type="button" aria-label="AI Auto: guided tour of this website">&#10022; AI Auto</button>
 
 <div class="lock" id="lock"><span>LOCK</span></div>
 <div class="ret" id="ret"></div>
@@ -714,7 +718,7 @@ h2 [data-split]:last-child:not(:first-child) { font-family: "Instrument Serif", 
       { title: 'Zoom-through scroll', text: "Scrolling here doesn't slide a page, it *flies you forward*. Each section zooms past like a cloud while the next one rushes in and settles gently into place, so moving through the site feels like a journey." },
       { title: 'Glass interface',     text: "Every card and button is *frosted glass* floating over the sky. Panels tilt toward your cursor and catch the light, so the whole interface feels soft, layered and alive instead of flat." },
       { title: 'A living mascot',     text: "The girl in the corner is a *rigged 3D model* I wired up by hand. She reads what you hover over, smirks at you, braces herself when you scroll, and gets properly annoyed if you mess up her hair." },
-      { title: 'One single file',     text: "The whole site is built into *one single file* with no build step and no setup. It opens straight away, works anywhere, and stays easy for me to keep improving." },
+      { title: 'No build step',       text: "The whole site is *plain HTML, CSS and JavaScript* with no build step and no setup. It opens straight away, works anywhere, and stays easy for me to keep improving." },
       { title: 'Every screen size',   text: "Phone, tablet or a big desktop, the same story plays on all of them. The layout reshapes itself to fit, and if you prefer less motion, the site *calms down* and respects that too." }
     ]
   };
@@ -1653,6 +1657,8 @@ h2 [data-split]:last-child:not(:first-child) { font-family: "Instrument Serif", 
     const HAIR_RECOVER = 0.04;      // how fast the hair tidies itself when you stop (per second)
 
     const model = window.createNimbus3D($('#nbCanvas'), 'models/daffodill.glb');
+    (window.RJ = window.RJ || {}).nimbus = model;
+    const touring = () => !!(window.RJTour && window.RJTour.active);
     const mix = (a, b, t) => a + (b - a) * t;
     const TEXT = 'main h1, main h2, main h3, main p, main .go, main .cta, main .mail, main time, main .when, main .stat span';
 
@@ -1668,7 +1674,7 @@ h2 [data-split]:last-child:not(:first-child) { font-family: "Instrument Serif", 
     Object.keys(REST).forEach(k => { vel[k] = 0; });
     let T = 0, blinkAmt = 0, blinkTimer = 3, blinkPhase = 0, touchE = 0;
 
-    function render() { model.draw({ st, T, blink: blinkAmt, touch: touchE }); }
+    function render() { model.draw({ st, T, blink: blinkAmt, touch: touchE, tour: touring() ? window.RJTour.pose : null }); }
 
     function step(dt) {
       T += dt;
@@ -1721,7 +1727,7 @@ h2 [data-split]:last-child:not(:first-child) { font-family: "Instrument Serif", 
       const dx = e.clientX - mx, dy = e.clientY - my;
       mx = e.clientX; my = e.clientY;
       hoverEl = e.target && e.target.closest ? e.target.closest(TEXT) : null;
-      if (!ready) return;
+      if (!ready || touring()) return;
       if (model.hitHair(mx, my)) pet(dx, dy);
     });
     lenis.on('scroll', () => {
@@ -1742,6 +1748,11 @@ h2 [data-split]:last-child:not(:first-child) { font-family: "Instrument Serif", 
 
     function think(dt) {
       phaseT += dt;
+      if (touring()) {               // AI Auto tour: tour.js drives her face and body
+        Object.assign(tgt, POSE.rest, window.RJTour.face(T));
+        touchE = 0; tgt.flinch = 0; tgt.mess = mess = 0; phase = 'idle'; cooldown = true;
+        return;
+      }
       touchE *= Math.exp(-5 * dt);
       if (T - lastPetAt > 0.15) tgt.flinch = 0;
       if (T - lastPetAt > 5) mess = Math.max(0, mess - HAIR_RECOVER * dt);
@@ -1812,6 +1823,23 @@ h2 [data-split]:last-child:not(:first-child) { font-family: "Instrument Serif", 
   }
 
   // =====================================================================
+  //  HOOKS for tour.js (the AI Auto guided tour)
+  // =====================================================================
+  Object.assign(window.RJ = window.RJ || {}, {
+    lenis, isMobile, finePointer, reduceMotion,
+    isReady: () => booted,
+    // fly to a section and resolve when the page has settled there
+    flyTo: sel => new Promise(res => {
+      lenis.start(); flyTo(sel);
+      const t0 = performance.now();
+      const chk = () => (performance.now() - t0 > 500 && flyF === null && !lenis.isScrolling) ? res() : setTimeout(chk, 90);
+      chk();
+    }),
+    // scroll position for the "How this site was made" graph at progress p (0..1)
+    graphY: p => zoom ? gStart + gHold * p : tops[gI] + Math.max(0, heights[gI] - innerHeight) * p
+  });
+
+  // =====================================================================
   //  BOOT
   // =====================================================================
   (async function boot() {
@@ -1849,5 +1877,6 @@ h2 [data-split]:last-child:not(:first-child) { font-family: "Instrument Serif", 
   } catch (e) { /* keeps the data link */ }
 })();
 </script>
+<script src="tour.js"></script>
 </body>
 </html>

@@ -13,6 +13,13 @@ python -m http.server 5174
 
 Then open http://localhost:5174.
 
+## AI Auto tour
+
+Click **AI Auto** (top bar, or the button by the mascot on phones) and the mascot flies through every
+section, points at each part, explains it in a speech bubble (and out loud with the browser's voice),
+and drives the page's effects with her own cursor. Back / Pause / Next / Voice / Stop are in the bar at
+the bottom (keys: arrows, Space, Esc). The words live in `STEPS` at the top of `tour.js`.
+
 ## Credits
 
 The corner mascot uses "(Neverness to Everness) Daffodill Default"
