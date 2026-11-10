@@ -157,7 +157,10 @@
   function pickVoice() {
     if (!hasVoice) return null;
     const vs = speechSynthesis.getVoices(), en = vs.filter(v => /^en/i.test(v.lang));
-    const prefs = [/(aria|jenny|sonia|libby|ava|emma).*natural/i, /google uk english female/i, /samantha/i, /zira/i, /female/i, /google us english/i];
+    // neural "Natural" voices first (Edge, Windows 11, recent Chrome/Safari), then the best classic ones
+    const prefs = [/(ava|emma|aria|jenny|sonia|libby|michelle|natasha|clara).*(natural|neural)/i, /(natural|neural)/i,
+      /(samantha|serena|karen|moira|tessa).*(enhanced|premium)/i, /(enhanced|premium)/i, /google uk english female/i,
+      /samantha/i, /google us english/i, /zira/i, /female/i];
     for (const p of prefs) { const v = en.find(x => p.test(x.name)); if (v) return v; }
     return en[0] || vs[0] || null;
   }
@@ -169,7 +172,8 @@
       const fin = () => { if (!done) { done = true; speaking = false; clearTimeout(guard); res(); } };
       const u = new SpeechSynthesisUtterance(text);
       if (voice) u.voice = voice;
-      u.rate = 1.04; u.pitch = 1.12;
+      const natural = voice && /(natural|neural|enhanced|premium)/i.test(voice.name);
+      u.rate = natural ? 1.0 : 0.96; u.pitch = 1.0;          // a pushed-up pitch is what sounds robotic
       u.onstart = () => { speaking = true; };
       u.onend = fin; u.onerror = fin;
       const guard = setTimeout(fin, text.length * 95 + 5000);     // some browsers never fire onend
@@ -267,19 +271,43 @@
     const r = range.getBoundingClientRect();
     return r.width > 2 && r.height > 2 ? r : el.getBoundingClientRect();
   }
-  // where she should hover to present an element: beside it, shoulders level with its middle
-  function spotFor(r) {
-    const { w, h } = size();
-    const tx = r.left + r.width / 2, ty = r.top + r.height / 2;
-    if (narrow()) {                 // phones: she waits in the half of the screen away from the target
-      const y = ty < innerHeight / 2 ? innerHeight - BAR_H - h / 2 : HUD_H + h / 2;
-      return clampSpot(tx < innerWidth / 2 ? innerWidth - w * 0.36 : w * 0.36, y);
+  // where she should be: she only moves when she has to. Candidate spots (stay here, slide up/down her
+  // own side, the other side) are scored by covering the thing she presents, covering other text, and
+  // how far she'd travel. Staying put wins whenever it's good enough.
+  const TEXTY = /^(H1|H2|H3|H4|P|LI|A|BUTTON|SPAN|STRONG|EM|B|I|SMALL|LABEL|IMG|svg|FIGURE|BLOCKQUOTE)$/;
+  function boxAt(x, y) { const { w, h } = size(); return { left: x - w * 0.32, right: x + w * 0.32, top: y - h * 0.45, bottom: y + h * 0.45 }; }
+  function hits(a, b, pad = 16) { return a.left < b.right + pad && a.right > b.left - pad && a.top < b.bottom + pad && a.bottom > b.top - pad; }
+  // is this point on real content (text, a heading, a button, an image) rather than empty sky?
+  function isText(el) {
+    if (!el || el === document.body || el === document.documentElement || el.closest('.tour-ui,.tour-bar')) return false;
+    if (el.closest('h1,h2,h3,h4,p,li,a,button,blockquote,figure,img,svg,label,.proj,.panel,.step,.gx-box')) return true;
+    return TEXTY.test(el.tagName) || [...el.childNodes].some(c => c.nodeType === 3 && c.textContent.trim().length > 1);
+  }
+  function textUnder(bx) {
+    let n = 0;
+    for (let i = 0; i < 4; i++) for (let j = 0; j < 6; j++) {
+      const x = bx.left + (bx.right - bx.left) * (i + 0.5) / 4, y = bx.top + (bx.bottom - bx.top) * (j + 0.5) / 6;
+      if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) continue;
+      if (isText(document.elementFromPoint(x, y))) n++;
     }
-    let x;
-    if (innerWidth - r.right >= w * 0.6) x = r.right + w * 0.34;
-    else if (r.left >= w * 0.6) x = r.left - w * 0.34;
-    else x = tx < innerWidth / 2 ? innerWidth - w * 0.34 : w * 0.34;
-    return clampSpot(x, ty + h * (0.5 - SHOULDER));
+    return n;
+  }
+  function bestSpot(r) {
+    const { w, h } = size();
+    const ty = r ? r.top + r.height / 2 : innerHeight / 2;
+    const ly = clampSpot(0, ty + h * (0.5 - SHOULDER)).y;
+    const cands = narrow()
+      ? [[pos.x, pos.y], [innerWidth - w * 0.36, innerHeight - BAR_H - h / 2], [w * 0.36, innerHeight - BAR_H - h / 2], [innerWidth - w * 0.36, HUD_H + h / 2], [w * 0.36, HUD_H + h / 2]]
+      : [[pos.x, pos.y], [pos.x, ly], [innerWidth - w * 0.36, ly], [innerWidth - w * 0.36, pos.y], [w * 0.36, ly], [w * 0.36, pos.y]];
+    let best = null;
+    cands.forEach(([x, y], i) => {
+      const c = clampSpot(x, y), bx = boxAt(c.x, c.y);
+      const travel = Math.hypot(c.x - pos.x, c.y - pos.y);
+      const sideSwitch = Math.abs(c.x - pos.x) > innerWidth * 0.35;
+      const score = (r && hits(bx, r) ? 1000 : 0) + textUnder(bx) * 12 + travel * 0.08 + (sideSwitch ? 60 : 0) - (i === 0 ? 25 : 0);
+      if (!best || score < best.score) best = { x: c.x, y: c.y, score };
+    });
+    return best;
   }
   // a real flight: crouch, spring off, follow a curved arc (speeding up, then braking), flare and settle.
   // Her facing, lean, banking, wind and trail all come from the actual motion in tick().
@@ -288,7 +316,7 @@
     if (d < 6) return;
     const { h } = size();
     const p0 = { x: pos.x, y: pos.y }, long = d > 150;
-    const lift = Math.min(170, d * 0.28) * (long ? 1 : 0.4);
+    const lift = Math.min(110, d * 0.18) * (long ? 1 : 0.4);
     const minY = HUD_H + h * 0.3;
     const c1 = { x: p0.x + (spot.x - p0.x) * 0.3, y: Math.max(minY, p0.y + (spot.y - p0.y) * 0.3 - lift) };
     const c2 = { x: p0.x + (spot.x - p0.x) * 0.75, y: Math.max(minY, p0.y + (spot.y - p0.y) * 0.75 - lift * 0.8) };
@@ -300,19 +328,16 @@
     flying = true;
     const path = { t: 0 };
     await tween(path, {
-      t: 1, duration: clamp(d / 620, 0.75, 2.1), ease: 'sine.inOut',
+      t: 1, duration: clamp(d / 480, 0.9, 2.6), ease: 'power2.inOut',
       onUpdate: () => {
         const t = path.t, u = 1 - t;
         pos.x = u * u * u * p0.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * spot.x;
         pos.y = u * u * u * p0.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * spot.y;
-        if (long && !opts.exiting && t > 0.64 && pose.state !== 'land' && pose.state !== 'hover') pose.state = 'land';   // flare, absorb, settle
+        if (!opts.exiting && t > 0.55 && pose.state !== 'hover') pose.state = 'hover';   // ease out of the glide while slowing
       }
     });
     flying = false;
-    // touchdown on air: a small dip and bounce (the land clip bends the knees through it)
-    await tween(pos, { y: spot.y + (long ? 9 : 4), duration: 0.18, ease: 'power1.out' });
-    await tween(pos, { y: spot.y, duration: 0.5, ease: 'back.out(2.2)' });
-    pose.state = 'hover';
+    if (!opts.exiting) pose.state = 'hover';
   }
   async function presentTo(r) {
     const { h } = size();
@@ -345,13 +370,11 @@
   async function goSection(sec) {
     if (sec === curSec) return;
     showBubble(false);
-    // she glides across while the page zooms through to the next section
-    const { w } = size();
-    const travel = clampSpot(pos.x > innerWidth / 2 ? w * 0.6 : innerWidth - w * 0.6, innerHeight * 0.5);
-    const flying = flyToSpot(travel);
+    // she stays where she is and floats while the page zooms through to the next section
+    look.x = 0; look.y = 0.05;
+    tween(pose, { point: 0, wave: 0, duration: 0.3 });
     await RJ.flyTo(sec);
     RJ.lenis.stop();
-    await flying;
     curSec = sec; graphP = 0;
     await sleep(700);                 // let the section's reveal animation settle before measuring
   }
@@ -438,15 +461,13 @@
     }
     target = null;
     if (el) {
-      await flyToSpot(spotFor(rectOf(el)));
+      const b = bestSpot(rectOf(el));
+      if (Math.hypot(b.x - pos.x, b.y - pos.y) > 40) await flyToSpot(b);
       target = rectOf(el);
       await presentTo(target);
     } else {
-      const { w } = size();
-      const spot = s.farewell || s === STEPS[0]
-        ? clampSpot(narrow() ? innerWidth / 2 : innerWidth * 0.68, innerHeight * 0.5)
-        : clampSpot(narrow() ? w * 0.4 : innerWidth - w * 0.5, innerHeight * 0.5);
-      await flyToSpot(spot);
+      const b = bestSpot(null);
+      if (Math.hypot(b.x - pos.x, b.y - pos.y) > 40) await flyToSpot(b);
       await faceViewer();
     }
     if (s.wave) { pose.waveSide = 1; tween(pose, { wave: 1, point: 0, duration: 0.5 }); look.smile = 1.6; }
@@ -489,7 +510,7 @@
     pose.velPx = [motion.vx, motion.vy];
     if (flying) pose.yaw += (clamp(motion.vx / 280, -1, 1) * 0.85 - pose.yaw) * 0.12;     // turn toward where she's going
     const ax = (motion.vx - prevVx) / dt;
-    pose.roll += ((flying ? clamp(-ax / 9000, -0.22, 0.22) : 0) - pose.roll) * 0.08;       // bank into speed changes
+    pose.roll += ((flying ? clamp(-ax / 14000, -0.12, 0.12) : 0) - pose.roll) * 0.06;       // bank into speed changes
     hairSwing += (clamp(-motion.vx / 70, -14, 14) - hairSwing) * 0.12;
     if (flying && pose.speed > 0.3 && now - motion.lastSpark > 40) { motion.lastSpark = now; spark(); }
     const target = speaking || (!voiceOn && typing) ? 1 : 0;
@@ -520,7 +541,7 @@
     bar.classList.add('on');
     gsap.to(cursorEl, { opacity: 1, duration: 0.4 });
     updateBar();
-    await flyToSpot({ x: innerWidth * (narrow() ? 0.7 : 0.74), y: innerHeight * 0.5 }, { entering: true });
+    await flyToSpot(bestSpot(null), { entering: true });
 
     while (idx < STEPS.length && !stopReq) {
       updateBar();

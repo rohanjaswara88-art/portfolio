@@ -110,7 +110,8 @@
       if (name !== playing && acts[name]) {
         const next = acts[name], prev = acts[playing];
         next.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).play();
-        if (prev) prev.crossFadeTo(next, FADE[name] || 0.4, false);
+        const fade = playing === 'glide' && (name === 'idle' || name === 'talk') ? 1.3 : (FADE[name] || 0.4);
+        if (prev) prev.crossFadeTo(next, fade, false);
         playing = name; finished = false;
       }
       mixer.update(dt);
@@ -265,8 +266,9 @@
     // acceleration first; the head re-levels a beat later; arms then forearms, thighs then shins trail
     // behind and settle with a little overshoot; on a turn the hips lead and the chest and head counter.
     const MS = (w, z) => ({ x: V(), v: V(), w, z });
-    const MO = { core: MS(6.5, 0.8), head: MS(3.6, 0.85), arm: MS(4.2, 0.42), fore: MS(3.1, 0.38),
-                 leg: MS(3.6, 0.5), shin: MS(2.7, 0.42), twist: MS(5, 0.7) };
+    // well damped (zeta 0.8-0.9): limbs follow and settle softly instead of swinging past and back
+    const MO = { core: MS(5.5, 0.9), head: MS(3.4, 0.95), arm: MS(3.8, 0.8), fore: MS(3.0, 0.78),
+                 leg: MS(3.3, 0.82), shin: MS(2.6, 0.8), twist: MS(4.5, 0.9) };
     const mA = V(), mVel = V(), mPrev = V(), mAcc = V(), mDrive = V(), mAx = V(), mTw = V(), mH = V(), UPV = V(0, 1, 0);
     let mPrevYaw = null, mInit = false;
     function springStep(s, target, dt) {
@@ -290,7 +292,7 @@
         mAcc.copy(mVel).sub(mPrev).multiplyScalar(1 / dt);
         mPrev.copy(mVel);
         // what the body feels: acceleration plus air drag at speed (both in rough "g" units)
-        mDrive.copy(mAcc).multiplyScalar(1 / 700).addScaledVector(mVel, 0.35 / 300).clampLength(0, 1.3);
+        mDrive.copy(mAcc).multiplyScalar(1 / 1100).addScaledVector(mVel, 0.3 / 300).clampLength(0, 1.0);
         springStep(MO.core, mDrive, dt);
         springStep(MO.head, MO.core.x, dt);
         springStep(MO.arm, mDrive, dt);
