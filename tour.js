@@ -98,7 +98,7 @@
   //  STATE (read by the mascot script every frame)
   // =====================================================================
   const pose = { zoom: 0, fly: 0, yaw: null, bob: 0, point: 0, pointSide: 1, pointDir: [0, 0, 1], wave: 0, waveSide: 1, talk: 0,
-    speed: 0, vel: [0, 0], crouch: 0, flare: 0, roll: 0 };
+    speed: 0, vel: [0, 0], crouch: 0, flare: 0, roll: 0, state: 'hover', velPx: [0, 0] };   // state = hand-keyed clip (nimbus-motion.js)
   const TOP_SPEED = 950;            // px/s that counts as full speed (lean, wind, trail)
   const motion = { vx: 0, vy: 0, lx: 0, ly: 0, lt: 0, lastSpark: 0 };
   let flying = false;
@@ -294,9 +294,10 @@
     const c2 = { x: p0.x + (spot.x - p0.x) * 0.75, y: Math.max(minY, p0.y + (spot.y - p0.y) * 0.75 - lift * 0.8) };
     look.x = 0; look.y = 0.05;
     tween(pose, { point: 0, wave: 0, duration: 0.25 });
-    if (long) await tween(pose, { crouch: 1, duration: 0.24, ease: 'power2.out' });   // anticipation
+    // long trips play the keyed take-off (gather, spring) which flows into the glide loop;
+    // short hops stay in the hover clip and just lean with the speed
+    if (long) { pose.state = 'takeoff'; await sleep(420); }
     flying = true;
-    tween(pose, { crouch: 0, fly: 1, duration: 0.35, ease: 'back.out(2)' });               // spring off
     const path = { t: 0 };
     await tween(path, {
       t: 1, duration: clamp(d / 620, 0.75, 2.1), ease: 'sine.inOut',
@@ -304,18 +305,14 @@
         const t = path.t, u = 1 - t;
         pos.x = u * u * u * p0.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * spot.x;
         pos.y = u * u * u * p0.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * spot.y;
-        pose.flare = long ? clamp((t - 0.7) / 0.25, 0, 1) : 0;                             // braking: legs swing under
+        if (long && t > 0.64 && pose.state !== 'land' && pose.state !== 'hover') pose.state = 'land';   // flare, absorb, settle
       }
     });
     flying = false;
-    // touchdown on air: a small dip and bounce while the body straightens
-    await Promise.all([
-      tween(pose, { fly: 0, flare: 0, duration: 0.6, ease: 'power2.out' }),
-      (async () => {
-        await tween(pos, { y: spot.y + (long ? 9 : 4), duration: 0.18, ease: 'power1.out' });
-        await tween(pos, { y: spot.y, duration: 0.5, ease: 'back.out(2.2)' });
-      })()
-    ]);
+    // touchdown on air: a small dip and bounce (the land clip bends the knees through it)
+    await tween(pos, { y: spot.y + (long ? 9 : 4), duration: 0.18, ease: 'power1.out' });
+    await tween(pos, { y: spot.y, duration: 0.5, ease: 'back.out(2.2)' });
+    pose.state = 'hover';
   }
   async function presentTo(r) {
     const { h } = size();
@@ -489,6 +486,7 @@
     const sp = Math.hypot(motion.vx, motion.vy);
     pose.speed = clamp(sp / TOP_SPEED, 0, 1);
     pose.vel = sp > 4 ? [motion.vx / sp, motion.vy / sp] : [0, 0];
+    pose.velPx = [motion.vx, motion.vy];
     if (flying) pose.yaw += (clamp(motion.vx / 280, -1, 1) * 1.15 - pose.yaw) * 0.12;     // turn toward where she's going
     const ax = (motion.vx - prevVx) / dt;
     pose.roll += ((flying ? clamp(-ax / 9000, -0.22, 0.22) : 0) - pose.roll) * 0.08;       // bank into speed changes
@@ -557,7 +555,7 @@
     await tween(pose, { fly: 0, yaw: RJ.nimbus && RJ.nimbus.restYaw != null ? RJ.nimbus.restYaw : -0.38, duration: 0.4 });
     gsap.ticker.remove(tick);
     nb.style.left = nb.style.top = nb.style.right = nb.style.bottom = nb.style.height = '';
-    pose.yaw = null; pose.talk = 0; pose.speed = 0; pose.vel = [0, 0]; pose.roll = 0; pose.crouch = pose.flare = 0; hairSwing = 0;
+    pose.yaw = null; pose.talk = 0; pose.speed = 0; pose.vel = [0, 0]; pose.roll = 0; pose.crouch = pose.flare = 0; pose.state = 'hover'; pose.velPx = [0, 0]; hairSwing = 0;
     document.body.classList.remove('touring');
     active = false;
     RJ.lenis.start();

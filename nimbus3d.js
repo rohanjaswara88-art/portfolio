@@ -86,7 +86,10 @@
     const anger = new THREE.Sprite(new THREE.SpriteMaterial({ map: angerTexture(), transparent: true, depthTest: false }));
     anger.renderOrder = 10; scene.add(anger);
 
-    let model = null, B = null, rest = null;
+    let model = null, B = null, rest = null, dyn = null;
+    const player = window.NimbusMotion ? NimbusMotion.createPlayer() : null;   // hand-keyed clips (tour)
+    let lastT = 0;
+    const lastVel = new THREE.Vector3(), velW = new THREE.Vector3(), inertia = new THREE.Vector3(), windW = new THREE.Vector3();
     const hair = [], cloth = [];       // cloth = coat tails, chains, trouser panels, rope, hair strands (wind)
     const loader = new THREE.GLTFLoader();
     if (THREE.DRACOLoader) { const d = new THREE.DRACOLoader(); d.setDecoderPath(DRACO_PATH); loader.setDRACOLoader(d); }
@@ -117,19 +120,26 @@
         const m = /^Bn_([FB])_hair(?:_mawei|\d+_)(0[01])$/.exec(n);
         if (m) hair.push({ bone: bones[n], back: m[1] === 'B', braid: n.includes('mawei'), link: +m[2], r1: Math.random() * 2 - 1, r2: Math.random() * 2 - 1, ph: Math.random() * 6.28 });
       });
-      // chains that stream in the wind while she flies: group links by chain, root first
-      const chains = {};
+      // spring physics chains: coat tails, chains, trouser panels, rope, hair. Links root first;
+      // each link's tip is its child bone. Softer settings = floppier.
+      const groups = {};
       Object.keys(bones).forEach(n => {
-        let m = /^(Bone_Chain_[FH]|Bn_[BL]_legpd_[AB]|Bn_[RB]_pigu_pd_[AB]|Bn_F_shengzi_A)(\d\d)$/.exec(n);
-        let k = 1;
-        if (!m) { m = /^(Bn_[FB]_hair(?:_mawei|\d+_))(\d\d)$/.exec(n); k = 0.55; if (m && +m[2] > 3) m = null; }
-        if (m) (chains[m[1]] = chains[m[1]] || []).push({ bone: bones[n], link: +m[2], k });
+        let m = /^(Bone_Chain_[FH]|Bn_[BL]_legpd_[AB]|Bn_[RB]_pigu_pd_[AB])(\d\d)$/.exec(n), kind = 'cloth';
+        if (!m) { m = /^(Bn_F_shengzi_A)(\d\d)$/.exec(n); kind = 'rope'; }
+        if (!m) { m = /^(Bn_[FB]_hair(?:_mawei|\d+_))(\d\d)$/.exec(n); kind = 'hair'; }
+        if (m) (groups[m[1]] = groups[m[1]] || { kind, list: [] }).list.push({ bone: bones[n], link: +m[2] });
       });
-      Object.values(chains).forEach(list => {
-        list.sort((a, b) => a.link - b.link);
-        const n = list.length, ph = Math.random() * 6.28;
-        list.forEach((c, i) => cloth.push({ bone: c.bone, k: c.k, i, share: 2 * (i + 1) / (n * (n + 1)), ph }));
+      const PHYS = {
+        cloth: { stiff: 70, damp: 7, air: 1.3, gravity: 220 },
+        rope:  { stiff: 40, damp: 5, air: 1.0, gravity: 320 },
+        hair:  { stiff: 150, damp: 11, air: 0.7, gravity: 120 }
+      };
+      Object.values(groups).forEach(g => {
+        g.list.sort((a, b) => a.link - b.link);
+        const links = g.list.map(c => ({ bone: c.bone, tip: c.bone.children.find(x => x.isBone) })).filter(L => L.tip);
+        if (links.length) cloth.push(Object.assign({ links }, PHYS[g.kind]));
       });
+      if (window.NimbusMotion) dyn = NimbusMotion.createDynamics(cloth);
       rest = new Map();
       Object.values(bones).forEach(b => rest.set(b, { p: b.position.clone(), q: b.quaternion.clone() }));
       model = gltf.scene;
@@ -164,7 +174,7 @@
       bone.position.set(r.p.x + tv.x / ts.x, r.p.y + tv.y / ts.y, r.p.z + tv.z / ts.z);
     }
     // an arm direction in her own body space (x = her left), blended between poses
-    function armLocal(w, i, side, tp, T) {
+    function armLocal(w, i, side, tp, T, cp, clipW) {
       const d = ARM.rest[i].clone().multiplyScalar(Math.max(0, 1 - w.brace - w.hips))
         .addScaledVector(ARM.brace[i], w.brace).addScaledVector(ARM.hips[i], w.hips);
       if (tp.fly > 0) d.normalize().lerp(ARM.fly[i], tp.fly);
@@ -173,6 +183,10 @@
       if (tp.flare > 0) d.normalize().lerp(ARM_EXTRA.flare[i], tp.flare);
       const climb = Math.max(0, -tp.vel[1]) * tp.speed * tp.fly;
       if (climb > 0.05 && side === 1) d.normalize().lerp(ARM_EXTRA.reach[i], Math.min(1, climb * 1.6));
+      if (cp && clipW > 0) {                          // hand-keyed clip pose (stored with x = her left)
+        const cv = cp[side > 0 ? (i ? 'aLf' : 'aLu') : (i ? 'aRf' : 'aRu')];
+        d.normalize().lerp(V(cv[0] * side, cv[1], cv[2]).normalize(), clipW);
+      }
       if (tp.wave > 0 && side === tp.waveSide) {
         const wave = i === 0 ? V(0.8, 0.6, 0.25) : V(0.15 + 0.38 * Math.sin(T * 9), 1, 0.2);
         d.normalize().lerp(wave, tp.wave);
@@ -231,7 +245,12 @@
       const side = Math.abs(tp.vel[0]), up = -tp.vel[1];
       const pitch = tp.fly * (0.12 + 0.55 * tp.speed * (0.35 + 0.65 * side)) - up * tp.speed * tp.fly * 0.25
         + tp.crouch * 0.25 - tp.flare * 0.4;
-      model.rotation.set(pitch, yaw, tp.roll);
+      // hand-keyed clip (tour): it owns the body pose, faded in with the full-body framing
+      const clipW = tp.state && player ? tp.zoom : 0;
+      let cp = null;
+      if (clipW > 0) { player.play(tp.state, T); cp = player.sample(T); }
+      const bodyPitch = cp ? pitch * (1 - clipW) + (cp.pitch + (player.state === 'hover' ? 0.25 * tp.speed : 0)) * clipW : pitch;
+      model.rotation.set(bodyPitch, yaw, tp.roll + (cp ? cp.roll * clipW : 0));
       model.position.copy(PIVOT).sub(PIVOT.clone().applyEuler(model.rotation));
       model.position.y += tp.bob * Math.sin(T * 2.2);
       FWD.set(Math.sin(yaw), 0, Math.cos(yaw)); SIDE.set(Math.cos(yaw), 0, -Math.sin(yaw));
@@ -243,6 +262,10 @@
       rotateWorld(B.spine1, FWD, -(st.bank + st.tilt * 0.6 + Math.sin(T * 0.8) * 0.8 - shake) * DEG);
       rotateWorld(B.spine1, SIDE, (st.lean - 1) * 1.8 + Math.sin(T * 1.5) * 0.012 - belt * 0.06);
       rotateWorld(B.spine2, AY, st.gx * 0.12);
+      if (cp) {
+        rotateWorld(B.spine1, SIDE, cp.spine[0] * clipW); rotateWorld(B.spine1, AY, cp.spine[1] * clipW); rotateWorld(B.spine1, FWD, -cp.spine[2] * clipW);
+        rotateWorld(B.spine2, SIDE, cp.chest[0] * clipW); rotateWorld(B.spine2, AY, cp.chest[1] * clipW); rotateWorld(B.spine2, FWD, -cp.chest[2] * clipW);
+      }
 
       // head + neck follow her gaze; a little head shake when she's really annoyed
       const headRest = B.head.getWorldQuaternion(new THREE.Quaternion());
@@ -251,6 +274,7 @@
       rotateWorld(B.neck, SIDE, st.gy * 0.18);
       rotateWorld(B.head, SIDE, st.gy * 0.28);
       rotateWorld(B.head, FWD, -st.tilt * 1.6 * DEG + an * 0.05 * Math.sin(T * 14) * Math.min(1, mess * 2));
+      if (cp) { rotateWorld(B.head, SIDE, cp.head[0] * clipW); rotateWorld(B.head, AY, cp.head[1] * clipW); rotateWorld(B.head, FWD, -cp.head[2] * clipW); }
       B.head.getWorldQuaternion(headTurn).multiply(headRest.invert());
 
       // eyelids: blink, half-lidded (smug / reading / annoyed), flinch
@@ -271,7 +295,7 @@
       const pointW = V().fromArray(tp.pointDir).normalize();
       B.arm.forEach(a => {
         const dirs = [0, 1].map(i => {
-          const d = armLocal(w, i, a.side, tp, T);
+          const d = armLocal(w, i, a.side, tp, T, cp, clipW);
           if (i === 0) d.x += Math.sin(T * 0.8 + a.side) * 0.03;
           d.normalize().applyQuaternion(model.quaternion);
           if (tp.point > 0 && a.side === tp.pointSide) d.lerp(i === 0 ? pointW.clone().add(V(0, -0.25, 0)) : pointW, tp.point);
@@ -285,7 +309,12 @@
       const hoverW = tp.zoom * 0.6 * (1 - tp.fly);
       const legW = { fly: tp.fly, crouch: tp.crouch, flare: tp.flare, hover: hoverW };
       const legSum = legW.fly + legW.crouch + legW.flare + legW.hover;
-      if (legSum > 0.01) B.leg.forEach(l => {
+      if (cp) B.leg.forEach(l => {                     // clip legs
+        const t = cp[l.side > 0 ? 'lLt' : 'lRt'], c = cp[l.side > 0 ? 'lLc' : 'lRc'];
+        aimBlend(l.thigh, l.calf, V(t[0], t[1], t[2]).normalize().applyQuaternion(model.quaternion), clipW);
+        aimBlend(l.calf, l.foot, V(c[0], c[1], c[2]).normalize().applyQuaternion(model.quaternion), clipW);
+      });
+      else if (legSum > 0.01) B.leg.forEach(l => {
         const kick = Math.sin(T * 2.4 + l.side * 1.7), dangle = Math.sin(T * 1.4 + l.side);
         [0, 1].forEach(i => {
           const d = V();
@@ -307,19 +336,19 @@
         rotateWorld(h.bone, SIDE, (mess * 0.16 * h.r2 + Math.sin(T * 1.2 + h.ph) * 0.02) * k);
       });
 
-      // wind: coat tails, chains, trouser panels, rope and hair stream opposite to her motion and flutter;
-      // while she floats they sway gently
-      const wind = V(-tp.vel[0], tp.vel[1], 0).multiplyScalar(tp.speed);
-      const windAmt = Math.min(1, wind.length());
-      if (cloth.length && (windAmt > 0.02 || tp.zoom > 0.01)) {
+      // spring physics for coat, chains, trouser panels, rope and hair: they lag her motion,
+      // swing, overshoot and stream back in the air while she flies
+      const dt = Math.min(0.05, Math.max(0, T - lastT)); lastT = T;
+      if (dyn && dt > 0) {
+        const cmPerPx = 2 * lerp(FRAME.halfHeight, FULL.halfHeight, tp.zoom) / Math.max(1, canvas.clientHeight);
+        const vp = tp.velPx || [0, 0];
+        velW.set(vp[0] * cmPerPx, -vp[1] * cmPerPx, 0);
+        inertia.copy(velW).sub(lastVel).multiplyScalar(-1 / dt).clampLength(0, 2500);   // she speeds up -> cloth lags
+        lastVel.copy(velW);
+        windW.copy(velW).multiplyScalar(-1);                                             // air rushing past
+        windW.x += Math.sin(T * 0.7) * 6 * tp.zoom; windW.z += Math.cos(T * 0.5) * 5 * tp.zoom;   // a light breeze while floating
         model.updateMatrixWorld(true);
-        let axis = V(0, -1, 0).cross(wind);
-        if (axis.length() < 0.15) axis = SIDE.clone().multiplyScalar(wind.y >= 0 ? -1 : 1); else axis.normalize();
-        cloth.forEach(c => {
-          const flutter = Math.sin(T * 9 + c.i * 0.8 + c.ph) * 0.07 * windAmt;
-          rotateWorld(c.bone, axis, (WIND_BEND * windAmt * c.share * 1.0 + flutter) * c.k);
-          rotateWorld(c.bone, SIDE, Math.sin(T * 1.3 + c.ph + c.i * 0.4) * 0.025 * tp.zoom * c.k);
-        });
+        dyn.step(dt, inertia, windW);
       }
 
       // anger mark floats by her head and pulses
