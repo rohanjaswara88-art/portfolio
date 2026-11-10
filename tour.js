@@ -108,14 +108,14 @@
   let target = null;                // rect of what she's presenting (the bubble stays clear of it)
   const pos = { x: 0, y: 0 }, cur = { x: 0, y: 0 };
   const hasVoice = 'speechSynthesis' in window && typeof SpeechSynthesisUtterance === 'function';
-  let voiceOn = hasVoice;
-  if (!hasVoice) voiceBtn.style.display = 'none';
+  let voiceOn = true;                // recorded lines play even without the browser's speech engine
 
   window.RJTour = {
     get active() { return active; },
     pose,
     face: () => ({ gx: look.x, gy: look.y, mc: look.smile, ms: look.smirk, hs: hairSwing }),
     start: () => start(),
+    lines: () => STEPS.map(s => (typeof s.say === 'function' ? s.say() : s.say) || '').filter(Boolean),   // for voice/make
     stop: () => { stopReq = true; skip = true; }
   };
 
@@ -165,7 +165,49 @@
     return en[0] || vs[0] || null;
   }
   if (hasVoice) { voice = pickVoice(); speechSynthesis.onvoiceschanged = () => { voice = pickVoice(); }; }
-  function speak(text) {
+  // ---- recorded natural voice (Kokoro, pre-generated: voice/<hash>.mp3, listed in voice/manifest.json) ----
+  // Same voice in every browser; the browser's own voice is only the fallback for a missing line.
+  const voiceHash = t => { let h = 0x811c9dc5; for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16).padStart(8, '0'); };
+  let recorded = null, actx = null, analyser = null, levelBuf = null, voiceLevel = 0;
+  fetch('voice/manifest.json').then(r => r.ok ? r.json() : null).then(m => { recorded = m && m.files ? new Set(m.files) : null; }).catch(() => {});
+  function audioGraph() {                       // created on the AI Auto click (a user gesture), reused after
+    if (actx || !window.AudioContext) return;
+    try {
+      actx = new AudioContext();
+      analyser = actx.createAnalyser(); analyser.fftSize = 512; levelBuf = new Float32Array(analyser.fftSize);
+      analyser.connect(actx.destination);
+    } catch (e) { actx = null; }
+  }
+  function readLevel() {                        // loudness of her voice right now -> how far her mouth opens
+    if (!analyser || !speaking) return 0;
+    analyser.getFloatTimeDomainData(levelBuf);
+    let sum = 0; for (let i = 0; i < levelBuf.length; i++) sum += levelBuf[i] * levelBuf[i];
+    return Math.min(1, Math.sqrt(sum / levelBuf.length) * 7);
+  }
+  function playRecorded(text) {
+    return new Promise(res => {
+      const a = new Audio('voice/' + voiceHash(text) + '.mp3');
+      let done = false;
+      const fin = () => { if (!done) { done = true; speaking = false; res(true); } };
+      a.onended = fin;
+      a.onerror = () => { if (!done) { done = true; speaking = false; res(false); } };
+      if (actx) { try { actx.createMediaElementSource(a).connect(analyser); if (actx.state === 'suspended') actx.resume(); } catch (e) { /* plays without the meter */ } }
+      a.play().then(() => { speaking = true; }).catch(() => { if (!done) { done = true; res(false); } });
+      const watch = () => {
+        if (done) return;
+        if (cut()) { a.pause(); fin(); return; }
+        if (paused && !a.paused) a.pause(); else if (!paused && a.paused && speaking) a.play().catch(() => {});
+        setTimeout(watch, 60);
+      };
+      watch();
+    });
+  }
+  async function speak(text) {
+    if (!voiceOn || cut()) return;
+    if (recorded && recorded.has(voiceHash(text)) && await playRecorded(text)) return;
+    return speakSynth(text);
+  }
+  function speakSynth(text) {
     if (!voiceOn || !hasVoice || cut()) return Promise.resolve();
     return new Promise(res => {
       let done = false;
@@ -440,7 +482,7 @@
       if (k >= 1) { clearInterval(typer); typing = false; }
     }, 30);
     // minimum time on screen: enough to read it, even if the browser's voice fails and ends at once
-    const readMs = voiceOn && hasVoice ? text.length * 38 + 900 : text.length * 52 + 1400;
+    const readMs = voiceOn && (hasVoice || recorded) ? text.length * 38 + 900 : text.length * 52 + 1400;
     await Promise.all([speak(text), sleep(readMs)]);
     clearInterval(typer); typing = false;
     bubbleP.textContent = text;
@@ -513,6 +555,8 @@
     pose.roll += ((flying ? clamp(-ax / 14000, -0.12, 0.12) : 0) - pose.roll) * 0.06;       // bank into speed changes
     hairSwing += (clamp(-motion.vx / 70, -14, 14) - hairSwing) * 0.12;
     if (flying && pose.speed > 0.3 && now - motion.lastSpark > 40) { motion.lastSpark = now; spark(); }
+    voiceLevel += (readLevel() - voiceLevel) * 0.5;
+    pose.mouth = analyser && speaking ? voiceLevel : null;          // recorded voice: the mouth follows the sound
     const target = speaking || (!voiceOn && typing) ? 1 : 0;
     pose.talk += (target - pose.talk) * 0.25;
     cursorEl.style.transform = 'translate(' + cur.x.toFixed(1) + 'px,' + cur.y.toFixed(1) + 'px)';
@@ -521,6 +565,7 @@
 
   async function start() {
     if (active || !RJ.isReady()) return;
+    audioGraph();
     active = true; paused = false; skip = false; backReq = false; stopReq = false; idx = 0; curSec = null;
     if (document.body.classList.contains('locked') && $('#menuBtn')) $('#menuBtn').click();   // close the menu
     document.body.classList.add('touring');

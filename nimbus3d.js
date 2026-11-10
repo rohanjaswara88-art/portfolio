@@ -393,7 +393,8 @@
       nudge(B.cornerL, headTurn, smirk * 0.3, curve + smirk, 0);
       nudge(B.cornerR, headTurn, 0, curve, 0);
       // talking: the lower lip and jaw open and close in an uneven rhythm
-      const open = tp.talk * (0.3 + 0.7 * Math.abs(Math.sin(T * 13) * Math.sin(T * 7.3 + 1)));
+      const open = tp.mouth != null ? Math.min(1, tp.mouth * 1.3)
+        : tp.talk * (0.3 + 0.7 * Math.abs(Math.sin(T * 13) * Math.sin(T * 7.3 + 1)));
       if (open > 0.01) B.lowerLip.forEach(l => nudge(l.bone, headTurn, 0, -l.k * open, 0));
 
       if (body && !M) body.torso(T, cp, clipW);
