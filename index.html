@@ -308,9 +308,11 @@ h2 { font-weight: 800; letter-spacing: -0.04em; line-height: 0.95; }
 h2 [data-split]:last-child:not(:first-child) { font-family: "Instrument Serif", Georgia, serif; font-style: italic; font-weight: 400; color: var(--sun); font-size: 1.1em; }
 
   /* ---------- Nimbus the cloud mascot ---------- */
-  .nimbus { position: fixed; right: 2vw; bottom: 1vh; height: clamp(165px, 24vh, 250px); aspect-ratio: 308 / 601; z-index: 60; pointer-events: none; opacity: 0; }
-  .nimbus canvas { position: absolute; left: -35%; top: -8%; width: 160%; height: 108%; display: block; }
-  @media (max-width: 700px) { .nimbus { height: 140px; right: 8px; bottom: 8px; } }
+  .nimbus { position: fixed; right: 1.5vw; bottom: 0; height: clamp(220px, 34vh, 340px); aspect-ratio: 3 / 4; z-index: 60; pointer-events: none; opacity: 0; }
+  .foot.credit { margin-top: 0.4rem; font-size: 0.72rem; opacity: 0.7; }
+  .foot.credit a { color: inherit; }
+  .nimbus canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  @media (max-width: 700px) { .nimbus { height: 165px; right: 0; } }
 
   /* ---------- Works: animated project interfaces ---------- */
   .art { container-type: inline-size; }
@@ -657,10 +659,11 @@ h2 [data-split]:last-child:not(:first-child) { font-family: "Instrument Serif", 
       </div>
     </div>
     <div class="foot">&copy; 2026 Rohan Jaswara &middot; Bardhaman, West Bengal</div>
+    <div class="foot credit">Mascot model: <a href="https://sketchfab.com/3d-models/neverness-to-everness-daffodill-default-f7d7956ae90a4db6b3d2ed5481844191" target="_blank" rel="noopener">&ldquo;(Neverness to Everness) Daffodill Default&rdquo;</a> by <a href="https://sketchfab.com/yabadiba" target="_blank" rel="noopener">symbol aughhhh</a>, <a href="http://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>. Posed and animated in code.</div>
   </section>
 </main>
 
-  <!-- NIMBUS: the mascot, a 3D model (nimbus3d.js) -->
+  <!-- NIMBUS: the mascot, a rigged 3D model (nimbus3d.js + models/daffodill.glb) -->
   <div class="nimbus" id="nimbus" aria-hidden="true"><canvas id="nbCanvas"></canvas></div>
 
 <div class="lock" id="lock"><span>LOCK</span></div>
@@ -683,6 +686,8 @@ h2 [data-split]:last-child:not(:first-child) { font-family: "Instrument Serif", 
 
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/DRACOLoader.js"></script>
 <script src="nimbus3d.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
@@ -708,7 +713,7 @@ h2 [data-split]:last-child:not(:first-child) { font-family: "Instrument Serif", 
       { title: 'Live 3D sky',         text: "The sky behind this page isn't a picture. It's a real 3D scene with drifting clouds and a glowing sun, drawn live in your browser. Move your mouse and the whole sky shifts with you, smooth at *60 frames per second*." },
       { title: 'Zoom-through scroll', text: "Scrolling here doesn't slide a page, it *flies you forward*. Each section zooms past like a cloud while the next one rushes in and settles gently into place, so moving through the site feels like a journey." },
       { title: 'Glass interface',     text: "Every card and button is *frosted glass* floating over the sky. Panels tilt toward your cursor and catch the light, so the whole interface feels soft, layered and alive instead of flat." },
-      { title: 'A living mascot',     text: "The girl in the corner is *my own drawing*, rebuilt as a little 3D model. She reads what you hover over, smirks at you, buckles a seatbelt when you scroll, and gets properly annoyed if you mess up her hair." },
+      { title: 'A living mascot',     text: "The girl in the corner is a *rigged 3D model* I wired up by hand. She reads what you hover over, smirks at you, braces herself when you scroll, and gets properly annoyed if you mess up her hair." },
       { title: 'One single file',     text: "The whole site is built into *one single file* with no build step and no setup. It opens straight away, works anywhere, and stays easy for me to keep improving." },
       { title: 'Every screen size',   text: "Phone, tablet or a big desktop, the same story plays on all of them. The layout reshapes itself to fit, and if you prefer less motion, the site *calms down* and respects that too." }
     ]
@@ -1638,7 +1643,7 @@ h2 [data-split]:last-child:not(:first-child) { font-family: "Instrument Serif", 
   // =====================================================================
   //  NIMBUS: the girl mascot (3D model in nimbus3d.js, behaviour here)
   //   - mouse over text      -> she reads it (serious), then turns to you, stares, smirks
-  //   - scroll               -> seatbelt on, off when you stop
+  //   - scroll               -> she braces herself, relaxes when you stop
   //   - rub the mouse over her hair -> hair gets messier each pass, she gets angrier
   //  All expressions ease in and out (smoothing + springs), nothing snaps.
   // =====================================================================
@@ -1647,7 +1652,7 @@ h2 [data-split]:last-child:not(:first-child) { font-family: "Instrument Serif", 
     const PET_RATE = 0.0011;        // how messy one mouse pass makes her hair (bigger = messier)
     const HAIR_RECOVER = 0.04;      // how fast the hair tidies itself when you stop (per second)
 
-    const model = window.createNimbus3D($('#nbCanvas'));
+    const model = window.createNimbus3D($('#nbCanvas'), 'models/daffodill.glb');
     const mix = (a, b, t) => a + (b - a) * t;
     const TEXT = 'main h1, main h2, main h3, main p, main .go, main .cta, main .mail, main time, main .when, main .stat span';
 
